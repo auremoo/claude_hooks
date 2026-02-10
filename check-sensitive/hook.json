@@ -1,0 +1,8 @@
+{
+  "name": "check-sensitive",
+  "description": "Scans files for sensitive data (client names, IPs, locations) before sending to Anthropic",
+  "event": "PreToolUse",
+  "matcher": "Read|Grep|Edit|Write",
+  "timeout": 5,
+  "files": ["hook.sh", "sensitive_patterns.txt"]
+}

@@ -1,0 +1,34 @@
+# =============================================================================
+# Sensitive Data Patterns - one regex per line (grep -iE syntax)
+# =============================================================================
+# Lines starting with # are comments. Empty lines are ignored.
+# Patterns are case-insensitive. Use \. to escape dots in IPs.
+#
+# Customize this file for each project/client.
+# =============================================================================
+
+# --- Client / company names ---
+# MyClient
+# MyClientSubsidiary
+
+# --- Site locations (cities, factories, plants) ---
+# SiteCity
+# PlantName
+
+# --- Production network IPs ---
+# 10\.135\.
+# 192\.168\.100\.
+
+# --- Hostnames / FQDNs ---
+# srv-prod-
+# scada\.internal
+
+# --- Credentials patterns (catch hardcoded secrets) ---
+# password\s*=\s*".+"
+# apikey\s*=
+# secret\s*=
+# token\s*=
+
+# --- Personal data (GDPR) ---
+# @company\.com
+# badge\s*=
