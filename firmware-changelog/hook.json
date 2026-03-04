@@ -1,0 +1,8 @@
+{
+  "name": "firmware-changelog",
+  "description": "Maintains a firmware-specific changelog with versioning, registers, and peripherals affected",
+  "event": "PostToolUse",
+  "matcher": "Edit|Write",
+  "timeout": 5,
+  "files": ["hook.sh"]
+}

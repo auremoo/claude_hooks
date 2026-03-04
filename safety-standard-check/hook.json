@@ -1,0 +1,8 @@
+{
+  "name": "safety-standard-check",
+  "description": "Checks code compliance with safety standards (IEC 61508, DO-178C, ISO 26262, IEC 62443)",
+  "event": "PreToolUse",
+  "matcher": "Edit|Write",
+  "timeout": 5,
+  "files": ["hook.sh", "safety_rules.txt"]
+}

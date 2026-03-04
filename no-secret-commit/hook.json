@@ -1,0 +1,8 @@
+{
+  "name": "no-secret-commit",
+  "description": "Scans staged files for secrets (API keys, tokens, passwords) before git commit",
+  "event": "PreToolUse",
+  "matcher": "Bash",
+  "timeout": 10,
+  "files": ["hook.sh", "secret_patterns.txt"]
+}

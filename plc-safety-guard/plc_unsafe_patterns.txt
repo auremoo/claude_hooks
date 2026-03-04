@@ -1,0 +1,48 @@
+# =============================================================================
+# PLC/Automation Unsafe Patterns
+# =============================================================================
+# Patterns for Structured Text (IEC 61131-3), CODESYS, TwinCAT, Siemens SCL.
+# One regex per line. Lines starting with # are comments.
+# =============================================================================
+
+# --- Direct output writes without safety check ---
+# Writing to physical outputs (%Q) without safety interlock
+%Q[WXD]?\d+\.\d+\s*:=\s*TRUE
+AT\s+%Q.*:=\s*(?!.*AND.*safety|.*AND.*interlock|.*IF.*safe)
+
+# --- Loops without watchdog/timeout ---
+WHILE\s+TRUE\s+DO(?!.*timeout|.*watchdog|.*TON|.*counter)
+REPEAT(?!.*UNTIL.*timeout|.*UNTIL.*watchdog)
+FOR\s+.*TO\s+.*DO(?!.*EXIT|.*RETURN)
+
+# --- Uninitialized variables on actuators ---
+# Assigning uninitialized or unguarded values to outputs
+:=\s*\w+_output\s*;(?!.*IF|.*CASE|.*AND)
+
+# --- Timer misuse ---
+# TON/TOF without maximum time limit
+TON\s*\(.*PT\s*:=\s*T#0
+TON\s*\((?!.*PT)
+TOF\s*\((?!.*PT)
+
+# --- Missing emergency stop handling ---
+# Function blocks without E-Stop check
+FUNCTION_BLOCK(?![\s\S]*E_?STOP|[\s\S]*EMERGENCY|[\s\S]*SAFETY)
+
+# --- Direct motor/valve control without ramp ---
+motor.*speed\s*:=\s*(?!.*ramp|.*accel).*\d{3,}
+valve.*position\s*:=\s*100(?!.*ramp|.*slow)
+
+# --- Dangerous Siemens SCL patterns ---
+OB1(?!.*OB35|.*watchdog)
+SFC46|SFC47
+# Direct SFB/SFC calls to dangerous system functions
+
+# --- Missing error handling ---
+# Communication blocks without error handling
+TCON|TSEND|TRCV(?!.*ERROR|.*STATUS|.*DONE)
+
+# --- Unsafe type conversions ---
+# Implicit REAL to INT conversion (precision loss on control values)
+:=\s*REAL_TO_INT\s*\(.*setpoint
+:=\s*TRUNC\s*\(.*position

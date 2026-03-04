@@ -1,0 +1,8 @@
+{
+  "name": "context-usage-monitor",
+  "description": "Tracks lines/volume read by Claude and warns when approaching context limits",
+  "event": "PostToolUse",
+  "matcher": "Read|Grep",
+  "timeout": 5,
+  "files": ["hook.sh"]
+}

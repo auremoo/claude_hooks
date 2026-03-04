@@ -1,0 +1,24 @@
+# =============================================================================
+# Allowed Paths for File Access
+# =============================================================================
+# One path prefix per line. Lines starting with # are comments.
+# Claude will only be allowed to access files under these paths.
+# Use $PROJECT_DIR as a placeholder for the current project directory.
+# If this file is empty (no uncommented lines), ALL paths are allowed.
+# =============================================================================
+
+# Allow current project directory (most common)
+$PROJECT_DIR
+
+# --- Add additional allowed paths below ---
+# /home/user/shared-libs
+# /tmp
+
+# --- Paths that are ALWAYS blocked (regardless of above) ---
+# These are hardcoded in hook.sh:
+#   ~/.ssh/
+#   ~/.gnupg/
+#   ~/.aws/
+#   ~/.config/gh/
+#   /etc/shadow
+#   /etc/passwd

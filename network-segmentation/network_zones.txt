@@ -1,0 +1,36 @@
+# =============================================================================
+# Network Zones & Segmentation Rules (ISA/IEC 62443)
+# =============================================================================
+# Define your network zones and forbidden cross-zone access patterns.
+#
+# Format: ZONE_NAME | IP_RANGE | SECURITY_LEVEL
+#
+# Zones:
+#   - IT: Corporate/enterprise network
+#   - DMZ: Demilitarized zone between IT and OT
+#   - OT: Operational technology / industrial network
+#   - SAFETY: Safety instrumented systems (SIS)
+#
+# The hook prevents direct access from IT to OT/SAFETY zones.
+# =============================================================================
+
+# --- Zone definitions ---
+IT | 10.0.0.0/8 | SL1
+IT | 172.16.0.0/12 | SL1
+IT | 192.168.1.0/24 | SL1
+
+DMZ | 192.168.100.0/24 | SL2
+
+OT | 192.168.50.0/24 | SL3
+OT | 10.135.0.0/16 | SL3
+OT | 172.20.0.0/16 | SL3
+
+SAFETY | 192.168.200.0/24 | SL4
+SAFETY | 10.200.0.0/16 | SL4
+
+# --- Forbidden cross-zone patterns ---
+# Format: SOURCE_ZONE -> TARGET_ZONE | REASON
+# IT -> OT | Direct IT-to-OT access violates ISA/IEC 62443 zone model
+# IT -> SAFETY | Direct IT-to-SAFETY access is strictly forbidden
+# OT -> IT | OT-to-IT access should go through DMZ
+# ANY -> SAFETY | Only certified safety controllers should access SAFETY zone

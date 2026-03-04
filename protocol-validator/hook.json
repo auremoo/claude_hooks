@@ -1,0 +1,8 @@
+{
+  "name": "protocol-validator",
+  "description": "Validates industrial protocol configurations (Modbus, OPC-UA, MQTT, BACnet)",
+  "event": "PreToolUse",
+  "matcher": "Edit|Write",
+  "timeout": 5,
+  "files": ["hook.sh"]
+}

@@ -1,0 +1,58 @@
+# =============================================================================
+# Protected Hardware Registers
+# =============================================================================
+# Patterns matching writes to critical hardware registers.
+# One regex per line. Lines starting with # are comments.
+#
+# Format: pattern | reason
+# =============================================================================
+
+# --- System Reset ---
+SCB->AIRCR | System reset control register (AIRCR)
+NVIC_SystemReset | System reset function
+RCC->.*RST | RCC reset registers
+__NVIC_SystemReset | CMSIS system reset
+
+# --- Watchdog ---
+IWDG->KR\s*= | Independent watchdog key register
+IWDG->PR\s*= | Watchdog prescaler (changes timeout)
+IWDG->RLR\s*= | Watchdog reload value
+WWDG->CR\s*= | Window watchdog control
+WDT->.*= | Generic watchdog write
+
+# --- Flash Memory ---
+FLASH->CR\s*=.*FLASH_CR_PER | Flash page erase
+FLASH->CR\s*=.*FLASH_CR_MER | Flash mass erase
+FLASH->KEYR\s*= | Flash unlock key register
+FLASH->CR\s*=.*FLASH_CR_STRT | Flash start operation
+HAL_FLASH_Program | HAL Flash program function
+HAL_FLASHEx_Erase | HAL Flash erase function
+
+# --- Power Control ---
+PWR->CR\s*= | Power control register
+SCB->SCR\s*=.*SLEEPDEEP | Deep sleep mode
+__WFI\(\) | Wait for interrupt (enters low power)
+__WFE\(\) | Wait for event (enters low power)
+HAL_PWR_EnterSTOP | Enter STOP mode
+HAL_PWR_EnterSTANDBY | Enter STANDBY mode
+
+# --- Clock Configuration ---
+RCC->CFGR\s*= | Clock configuration (can brick if wrong)
+RCC->CR\s*= | Clock control (PLL/HSE/HSI enable)
+RCC->PLLCFGR\s*= | PLL configuration
+SystemClock_Config | System clock reconfiguration
+
+# --- Memory Protection ---
+MPU->.*= | Memory Protection Unit registers
+MPU_Region | MPU region configuration
+SCB->SHCSR | System handler control (fault enables)
+
+# --- Boot Configuration ---
+FLASH->OPTKEYR | Option bytes unlock
+FLASH->OPTR | Option bytes register
+OB_RDP | Read protection level
+BOOT0 | Boot pin configuration
+
+# --- DMA to critical peripherals ---
+DMA.*->.*FLASH | DMA transfer to FLASH
+DMA.*->.*IWDG | DMA transfer to watchdog

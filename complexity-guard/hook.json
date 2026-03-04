@@ -1,0 +1,8 @@
+{
+  "name": "complexity-guard",
+  "description": "Warns when code complexity exceeds configurable thresholds after modifications",
+  "event": "PostToolUse",
+  "matcher": "Edit|Write",
+  "timeout": 10,
+  "files": ["hook.sh"]
+}

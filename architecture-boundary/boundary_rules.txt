@@ -1,0 +1,44 @@
+# =============================================================================
+# Architecture Boundary Rules
+# =============================================================================
+# Format: SOURCE_LAYER -> FORBIDDEN_IMPORT_PATTERN
+#
+# SOURCE_LAYER: regex matching file paths in that layer
+# FORBIDDEN_IMPORT_PATTERN: regex matching imports that violate the boundary
+#
+# Lines starting with # are comments. Separate source and forbidden with " -> "
+# =============================================================================
+
+# --- Clean Architecture ---
+# Domain layer must NOT import from infrastructure or application
+domain/ -> (from|import)\s+.*infrastructure
+domain/ -> (from|import)\s+.*application
+domain/ -> (from|import)\s+.*controllers?
+domain/ -> (from|import)\s+.*repositories(?!.*interface)
+domain/ -> (using)\s+.*\.Infrastructure
+domain/ -> (using)\s+.*\.Application
+
+# Application layer must NOT import from infrastructure
+application/ -> (from|import)\s+.*infrastructure
+application/ -> (from|import)\s+.*controllers?
+application/ -> (using)\s+.*\.Infrastructure
+application/ -> (using)\s+.*\.Presentation
+
+# --- Hexagonal Architecture ---
+# Core/ports must NOT import from adapters
+(core|ports)/ -> (from|import)\s+.*adapters?
+(core|ports)/ -> (using)\s+.*\.Adapters?
+
+# --- DDD Layers ---
+# Entities must not depend on services
+entities/ -> (from|import)\s+.*services?
+models/ -> (from|import)\s+.*controllers?
+
+# --- Common anti-patterns ---
+# Controllers should not import repositories directly
+controllers?/ -> (from|import)\s+.*repositories?(?!.*interface)
+controllers?/ -> (using)\s+.*\.Repositories?(?!.*Interface)
+
+# --- Frontend (React/Vue/Angular) ---
+# Components should not import API clients directly
+components/ -> (from|import)\s+.*(api|http|axios|fetch)(?!.*hook|.*service)

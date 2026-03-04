@@ -1,0 +1,8 @@
+{
+  "name": "branch-protection",
+  "description": "Prevents direct commits and pushes to protected branches (main, master, production)",
+  "event": "PreToolUse",
+  "matcher": "Bash",
+  "timeout": 5,
+  "files": ["hook.sh", "protected_branches.txt"]
+}

@@ -1,0 +1,8 @@
+{
+  "name": "docker-best-practices",
+  "description": "Checks Dockerfiles for common anti-patterns and security issues",
+  "event": "PostToolUse",
+  "matcher": "Edit|Write",
+  "timeout": 5,
+  "files": ["hook.sh"]
+}

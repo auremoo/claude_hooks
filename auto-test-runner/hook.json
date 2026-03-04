@@ -1,0 +1,8 @@
+{
+  "name": "auto-test-runner",
+  "description": "Automatically detects and runs related tests after code modifications",
+  "event": "PostToolUse",
+  "matcher": "Edit|Write",
+  "timeout": 30,
+  "files": ["hook.sh"]
+}

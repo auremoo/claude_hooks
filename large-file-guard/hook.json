@@ -1,0 +1,8 @@
+{
+  "name": "large-file-guard",
+  "description": "Warns before reading files larger than a configurable threshold",
+  "event": "PreToolUse",
+  "matcher": "Read",
+  "timeout": 5,
+  "files": ["hook.sh"]
+}

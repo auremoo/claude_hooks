@@ -1,0 +1,12 @@
+# =============================================================================
+# Protected Branches
+# =============================================================================
+# One branch name per line. Lines starting with # are comments.
+# Claude will be asked for confirmation before committing or pushing to these.
+# =============================================================================
+
+main
+master
+production
+prod
+release

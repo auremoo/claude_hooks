@@ -1,0 +1,8 @@
+{
+  "name": "dangerous-command-guard",
+  "description": "Blocks dangerous shell commands (rm -rf, git push --force, DROP TABLE, etc.) and asks for confirmation",
+  "event": "PreToolUse",
+  "matcher": "Bash",
+  "timeout": 5,
+  "files": ["hook.sh", "dangerous_patterns.txt"]
+}

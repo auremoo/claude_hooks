@@ -1,0 +1,8 @@
+{
+  "name": "naming-convention",
+  "description": "Checks that code follows project naming conventions (camelCase, snake_case, prefixes)",
+  "event": "PostToolUse",
+  "matcher": "Edit|Write",
+  "timeout": 5,
+  "files": ["hook.sh", "naming_rules.txt"]
+}

@@ -1,0 +1,8 @@
+{
+  "name": "network-segmentation",
+  "description": "Prevents IT/OT network boundary violations (ISA/IEC 62443 zones and conduits)",
+  "event": "PreToolUse",
+  "matcher": "Edit|Write|Bash",
+  "timeout": 5,
+  "files": ["hook.sh", "network_zones.txt"]
+}

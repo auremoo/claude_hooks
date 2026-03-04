@@ -1,0 +1,8 @@
+{
+  "name": "realtime-constraint",
+  "description": "Detects patterns that break real-time determinism in embedded/RTOS code",
+  "event": "PreToolUse",
+  "matcher": "Edit|Write",
+  "timeout": 5,
+  "files": ["hook.sh", "realtime_violations.txt"]
+}

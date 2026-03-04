@@ -1,0 +1,8 @@
+{
+  "name": "file-scope-guard",
+  "description": "Restricts file access to allowed directories only, prevents reading/writing outside project scope",
+  "event": "PreToolUse",
+  "matcher": "Read|Write|Edit|Grep|Glob",
+  "timeout": 5,
+  "files": ["hook.sh", "allowed_paths.txt"]
+}

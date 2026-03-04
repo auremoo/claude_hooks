@@ -1,0 +1,8 @@
+{
+  "name": "session-recap",
+  "description": "Maintains a real-time session summary of all changes made by Claude",
+  "event": "PostToolUse",
+  "matcher": "Edit|Write|Bash",
+  "timeout": 5,
+  "files": ["hook.sh"]
+}

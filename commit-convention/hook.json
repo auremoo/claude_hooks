@@ -1,0 +1,8 @@
+{
+  "name": "commit-convention",
+  "description": "Validates commit messages follow Conventional Commits format (feat:, fix:, etc.)",
+  "event": "PreToolUse",
+  "matcher": "Bash",
+  "timeout": 5,
+  "files": ["hook.sh"]
+}

@@ -1,0 +1,36 @@
+# =============================================================================
+# Forbidden Imports & Code Patterns
+# =============================================================================
+# One regex pattern per line. Lines starting with # are comments.
+# Matched against new code being written (new_string or content).
+# =============================================================================
+
+# --- Unsafe execution ---
+\beval\s*\(
+\bexec\s*\(
+subprocess\.call\(.*shell\s*=\s*True
+os\.system\s*\(
+child_process\.exec\(
+
+# --- Unsafe deserialization ---
+pickle\.loads?\(
+yaml\.load\s*\((?!.*Loader)
+marshal\.loads?\(
+
+# --- SQL injection risk ---
+f["'].*SELECT.*FROM.*\{
+f["'].*INSERT.*INTO.*\{
+f["'].*DELETE.*FROM.*\{
+\.format\(.*SELECT
+\+\s*["'].*WHERE
+
+# --- Forbidden packages (customize) ---
+# from forbidden_lib import
+# require\(['"]banned-package
+
+# --- Debug code that shouldn't be committed ---
+console\.log\(.*TODO
+debugger;
+import\s+pdb
+breakpoint\(\)
+binding\.pry

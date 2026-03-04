@@ -1,0 +1,8 @@
+{
+  "name": "auto-backup",
+  "description": "Creates automatic backup copies of files before Claude modifies them",
+  "event": "PreToolUse",
+  "matcher": "Edit|Write",
+  "timeout": 5,
+  "files": ["hook.sh"]
+}

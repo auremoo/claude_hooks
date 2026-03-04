@@ -1,0 +1,44 @@
+# =============================================================================
+# Safety Standard Compliance Rules
+# =============================================================================
+# Format: STANDARD | RULE_ID | PATTERN | MESSAGE
+#
+# Standards supported:
+#   IEC61508  - Functional safety (SIL)
+#   DO178C    - Airborne software (DAL)
+#   ISO26262  - Automotive (ASIL)
+#   IEC62443  - Industrial cybersecurity
+#   MISRA     - Motor Industry Software Reliability
+#
+# PATTERN: regex to detect violations in source code
+# =============================================================================
+
+# --- IEC 61508 / SIL Compliance ---
+IEC61508 | 61508-7.C.2 | \bgoto\s+ | goto statement forbidden (SIL 2+)
+IEC61508 | 61508-7.C.3 | \bsetjmp\b|\blongjmp\b | setjmp/longjmp forbidden (SIL 1+)
+IEC61508 | 61508-7.C.5 | #define\s+\w+\(.*\)\s+.*\n.*\n | Complex macros should be inline functions (SIL 2+)
+IEC61508 | 61508-7.C.8 | \b(float|double)\b.*==|\b(float|double)\b.*!= | Direct float comparison (use epsilon) (SIL 1+)
+IEC61508 | 61508-7.C.10 | union\s+\{ | Union types forbidden in safety code (SIL 3+)
+
+# --- MISRA C Rules ---
+MISRA | R.17.2 | \brecursi | Recursion shall not be used (MISRA R.17.2)
+MISRA | R.21.3 | \bmalloc\b|\bcalloc\b|\brealloc\b|\bfree\b | Dynamic memory forbidden (MISRA R.21.3)
+MISRA | R.21.6 | \bprintf\b|\bscanf\b|\bgets\b | Standard I/O library forbidden (MISRA R.21.6)
+MISRA | R.21.8 | \bsystem\b\s*\(|\babort\b\s*\(|\bexit\b\s*\( | System/abort/exit forbidden (MISRA R.21.8)
+MISRA | D.4.1 | \basm\b|\b__asm | Inline assembly should be documented (MISRA D.4.1)
+
+# --- DO-178C / Airborne ---
+DO178C | OBJ-6.3.4 | \b(void\s*\*|int\s+\*\s*\)\s*\w) | Implicit pointer casts (DAL A/B)
+DO178C | OBJ-6.3.6 | \bsignal\s*\(|\braise\s*\( | Signal handling forbidden (DAL A)
+DO178C | OBJ-6.3.8 | __attribute__\s*\(\s*\(\s*weak | Weak symbols forbidden (DAL A/B)
+
+# --- ISO 26262 / Automotive ---
+ISO26262 | Part6-Table1 | \bgoto\s+ | goto forbidden (ASIL B+)
+ISO26262 | Part6-Table3 | #pragma\s+ | pragma usage requires justification (ASIL A+)
+ISO26262 | Part6-Table5 | \bvolatile\s+.*=.*volatile | Multiple volatile access in expression (ASIL B+)
+
+# --- IEC 62443 / Cybersecurity ---
+IEC62443 | SR1.1 | (password|passwd|pwd)\s*=\s*["'][^"']+["'] | Hardcoded credentials (SR 1.1)
+IEC62443 | SR3.1 | \btelnet\b|\bftp\b(?!s) | Unencrypted protocol (SR 3.1)
+IEC62443 | SR3.5 | \bMD5\b|\bSHA1\b(?!.*deprecated) | Weak cryptographic algorithm (SR 3.5)
+IEC62443 | SR7.6 | (0\.0\.0\.0|INADDR_ANY) | Binding to all interfaces (SR 7.6)

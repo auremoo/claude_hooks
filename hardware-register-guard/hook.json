@@ -1,0 +1,8 @@
+{
+  "name": "hardware-register-guard",
+  "description": "Protects against accidental writes to critical hardware registers (watchdog, reset, flash)",
+  "event": "PreToolUse",
+  "matcher": "Edit|Write",
+  "timeout": 5,
+  "files": ["hook.sh", "protected_registers.txt"]
+}

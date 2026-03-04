@@ -1,0 +1,28 @@
+# =============================================================================
+# Environment Guard Rules
+# =============================================================================
+# Format: FILE_PATTERN | FORBIDDEN_CONTENT_PATTERN | MESSAGE
+#
+# FILE_PATTERN: regex matching file paths where this rule applies
+# FORBIDDEN_CONTENT_PATTERN: regex that should NOT appear in these files
+# MESSAGE: human-readable warning
+#
+# Use this to prevent production URLs/configs from appearing in dev files, etc.
+# =============================================================================
+
+# --- Production URLs in non-production configs ---
+\.(dev|development|local)\.(json|yaml|yml|env|toml)$ | (prod\.example\.com|production\.example\.com) | Production URL in dev config
+\.env\.development$ | (DATABASE_URL.*production|REDIS_URL.*prod) | Production database in dev environment
+\.env\.local$ | (DATABASE_URL.*production|REDIS_URL.*prod) | Production database in local environment
+
+# --- Dev/local configs in production files ---
+\.(prod|production)\.(json|yaml|yml|env|toml)$ | (localhost|127\.0\.0\.1|0\.0\.0\.0) | Localhost reference in production config
+\.env\.production$ | (localhost|127\.0\.0\.1) | Localhost in production environment
+
+# --- Hardcoded environment-specific values in source code ---
+\.(ts|js|py|cs|go|java)$ | (https?://prod\.|https?://production\.) | Hardcoded production URL in source code
+\.(ts|js|py|cs|go|java)$ | (https?://staging\.) | Hardcoded staging URL in source code
+
+# --- Common mistakes ---
+docker-compose\.yml$ | (password:\s*["'](?!.*\$\{).{8,}) | Hardcoded password in docker-compose
+\.env$ | ^(AWS_SECRET|STRIPE_SECRET|DATABASE_URL)=(?!\$\{).+ | Raw secret value in .env (use variable reference)

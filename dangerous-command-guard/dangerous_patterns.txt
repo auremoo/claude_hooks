@@ -1,0 +1,59 @@
+# =============================================================================
+# Dangerous Command Patterns
+# =============================================================================
+# One regex pattern per line. Lines starting with # are comments.
+# These patterns are matched against the full Bash command string.
+# =============================================================================
+
+# --- Destructive file operations ---
+rm\s+(-[a-zA-Z]*f|-[a-zA-Z]*r|--force|--recursive)
+rm\s+-rf
+rmdir\s+--ignore-fail-on-non-empty
+shred\s+
+wipe\s+
+
+# --- Git destructive operations ---
+git\s+push\s+.*--force
+git\s+push\s+.*-f\b
+git\s+reset\s+--hard
+git\s+clean\s+.*-f
+git\s+checkout\s+--?\s+\.
+git\s+restore\s+--staged\s+--worktree
+git\s+branch\s+.*-D\b
+git\s+rebase\s+.*--force
+
+# --- Database destructive operations ---
+DROP\s+(TABLE|DATABASE|SCHEMA|INDEX)
+TRUNCATE\s+TABLE
+DELETE\s+FROM\s+\w+\s*;
+ALTER\s+TABLE\s+.*DROP
+
+# --- System destructive operations ---
+mkfs\.
+dd\s+.*of=/dev/
+format\s+[a-zA-Z]:
+:(){ :\|:& };:
+chmod\s+(-R\s+)?777
+chown\s+-R\s+
+
+# --- Container/infra destructive ---
+docker\s+system\s+prune
+docker\s+rm\s+.*-f
+docker\s+rmi\s+.*-f
+kubectl\s+delete\s+
+terraform\s+destroy
+
+# --- Package managers (global/system-wide) ---
+npm\s+.*-g\s+uninstall
+pip\s+uninstall\s+.*-y
+apt\s+.*remove\s+.*-y
+apt-get\s+.*remove\s+.*-y
+
+# --- Kill/stop processes ---
+kill\s+-9
+killall\s+
+pkill\s+
+
+# --- Dangerous redirections ---
+>\s*/dev/sd[a-z]
+>\s*/etc/

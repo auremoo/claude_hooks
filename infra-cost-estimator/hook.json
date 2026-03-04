@@ -1,0 +1,8 @@
+{
+  "name": "infra-cost-estimator",
+  "description": "Warns before running infrastructure provisioning commands (terraform, pulumi, cloudformation)",
+  "event": "PreToolUse",
+  "matcher": "Bash",
+  "timeout": 5,
+  "files": ["hook.sh"]
+}

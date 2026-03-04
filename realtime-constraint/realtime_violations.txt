@@ -1,0 +1,62 @@
+# =============================================================================
+# Real-Time Constraint Violations
+# =============================================================================
+# Patterns that break determinism in real-time / embedded systems.
+# One regex per line. Lines starting with # are comments.
+# =============================================================================
+
+# --- Dynamic memory allocation ---
+\bmalloc\s*\(
+\bcalloc\s*\(
+\brealloc\s*\(
+\bfree\s*\(
+\bnew\s+\w+[\[\(]
+\bdelete\s+
+\bstd::vector\b
+\bstd::string\b
+\bstd::map\b
+\bstd::list\b
+
+# --- Blocking I/O ---
+\bprintf\s*\(
+\bscanf\s*\(
+\bfopen\s*\(
+\bfread\s*\(
+\bfwrite\s*\(
+\bstd::cout\b
+\bstd::cin\b
+
+# --- Unbounded operations ---
+\bsleep\s*\(
+\busleep\s*\(
+\bnanosleep\s*\(
+\bdelay\s*\(
+while\s*\(\s*1\s*\)(?!.*break|.*timeout)
+for\s*\(\s*;\s*;\s*\)(?!.*break|.*timeout)
+
+# --- Exceptions (non-deterministic unwinding) ---
+\bthrow\s+
+\btry\s*\{
+\bcatch\s*\(
+
+# --- Virtual functions (vtable indirection) ---
+\bvirtual\s+
+
+# --- Recursive calls (stack overflow risk) ---
+# Detected at analysis level, not pattern
+
+# --- Thread operations without priority ---
+pthread_create\s*\((?!.*SCHED_FIFO|.*SCHED_RR)
+std::thread\s*\(
+xTaskCreate\s*\((?!.*configMAX_PRIORITIES)
+
+# --- Floating point in ISR ---
+# ISR/interrupt handlers using float
+ISR\s*\(.*float
+__interrupt.*float
+void\s+.*IRQHandler.*float
+
+# --- System calls in critical section ---
+taskENTER_CRITICAL.*printf
+taskENTER_CRITICAL.*malloc
+__disable_irq.*malloc

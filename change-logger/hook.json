@@ -1,0 +1,8 @@
+{
+  "name": "change-logger",
+  "description": "Logs all file modifications made by Claude to .claude/changelog.log for audit/traceability",
+  "event": "PostToolUse",
+  "matcher": "Edit|Write|Bash",
+  "timeout": 5,
+  "files": ["hook.sh"]
+}

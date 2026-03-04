@@ -1,0 +1,8 @@
+{
+  "name": "plc-safety-guard",
+  "description": "Detects unsafe patterns in PLC/automation code (IEC 61131-3, Structured Text)",
+  "event": "PreToolUse",
+  "matcher": "Edit|Write",
+  "timeout": 5,
+  "files": ["hook.sh", "plc_unsafe_patterns.txt"]
+}
