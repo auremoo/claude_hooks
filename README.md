@@ -1,3 +1,6 @@
+> Créé par Aurélien Moote - Moo - 2026. Logiciel libre (licence MIT) :
+> réutilisable à condition de conserver la mention de l'auteur.
+
 # Claude Code Hooks
 
 Collection de 26 hooks [Claude Code](https://docs.anthropic.com/en/docs/claude-code) pour securiser, automatiser et ameliorer les sessions de developpement avec un LLM — de l'informatique pure a l'informatique industrielle.
@@ -650,3 +653,12 @@ Format : `[timestamp] ToolName: file_or_command`. Auto-tronque a 500 lignes quan
 - Les hooks ne ralentissent pas le workflow : timeout de 5-10s, `exit 0` si aucun match
 - Les patterns sont case-insensitive (`grep -iE`) sauf indication contraire
 - Tous les fichiers de config (patterns, rules, zones) sont editables apres installation
+
+---
+
+## Auteur & licence
+
+Créé par **Aurélien Moote - Moo - 2026**.
+Logiciel libre distribué sous [licence MIT](LICENSE) : réutilisable à condition de conserver la mention de l'auteur.
+
+Copyright (c) 2026 Aurélien Moote ("Moo") — https://github.com/auremoo/claude_hooks
