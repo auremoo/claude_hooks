@@ -6,126 +6,84 @@
 # configurable rules per file type.
 # =============================================================================
 
-INPUT=$(cat)
+HOOK_DIR=${BASH_SOURCE[0]%/*}; [ "$HOOK_DIR" = "${BASH_SOURCE[0]}" ] && HOOK_DIR=.
+if [ -f "$HOOK_DIR/_common.sh" ]; then . "$HOOK_DIR/_common.sh"; else . "$HOOK_DIR/../_common.sh" || exit 1; fi
 
-FILE_PATH=$(python3 -c "
-import json, sys
-try:
-    d = json.loads(sys.argv[1])
-    inp = d.get('tool_input', {})
-    print(inp.get('file_path', '') or '')
-except:
-    print('')
-" "$INPUT" 2>/dev/null)
+main() {
+  local FILE_PATH PYCODE REPLY RULES_FILE
 
-if [ -z "$FILE_PATH" ] || [ ! -f "$FILE_PATH" ]; then
-  exit 0
-fi
+  get_file_path || return 0
+  [ -f "$FILE_PATH" ] || return 0
 
-# Only check code files
-if ! echo "$FILE_PATH" | grep -qE '\.(ts|tsx|js|jsx|py|go|cs|java|rs|rb|php)$'; then
-  exit 0
-fi
+  # Only check code files
+  has_ext 'ts|tsx|js|jsx|py|go|cs|java|rs|rb|php' || return 0
 
-# --- Load and apply rules ---
-HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
-RULES_FILE="$HOOK_DIR/naming_rules.txt"
+  # Fast exit (no python) when no rule applies to this file type
+  RULES_FILE="$HOOK_DIR/naming_rules.txt"
+  path_gate "$RULES_FILE" ' | ' || return 0
 
-if [ ! -f "$RULES_FILE" ]; then
-  exit 0
-fi
+  IFS= read -r -d '' PYCODE <<'PYEOF'
+text = read_file(PATH)
+if text is None:
+    sys.exit(0)
+lines = text.split('\n')
 
-WARNINGS=$(python3 -c "
-import re, sys, os
+# Rules for this file type: FILE_PATTERN | CHECK_TYPE | DETAILS
+# (FILE_PATTERN may contain "|", DETAILS may be empty)
+checks = []
+for rule in rules(ARGS[0]):
+    m = re.match(r'^(.*?)\s+\|\s*(\w+)\s*\|\s*(.*)$', rule)
+    if not m:
+        continue
+    file_rx = rx(m.group(1).strip())
+    if file_rx and file_rx.search(PATH):
+        checks.append((m.group(2), m.group(3).strip()))
+if not checks:
+    sys.exit(0)
 
-file_path = sys.argv[1]
-rules_file = sys.argv[2]
+CASES = {
+    'camelCase': r'^[a-z][a-zA-Z0-9]*$',
+    'PascalCase': r'^[A-Z][a-zA-Z0-9]*$',
+    'snake_case': r'^[a-z][a-z0-9_]*$',
+    'UPPER_SNAKE_CASE': r'^[A-Z][A-Z0-9_]*$',
+    'kebab-case': r'^[a-z][a-z0-9-]*$',
+}
+
+def is_case(name, expected):
+    """expected: one case name, or several separated by "/" (any of them)."""
+    known = [CASES[c.strip()] for c in expected.split('/') if c.strip() in CASES]
+    return not known or any(re.match(pattern, name) for pattern in known)
+
+def declarations(pattern):
+    declaration_rx = re.compile(pattern)
+    for i, line in enumerate(lines):
+        m = declaration_rx.match(line)
+        if m:
+            yield i + 1, m.group(1)
+
 warnings = []
-
-try:
-    with open(file_path, 'r', errors='ignore') as f:
-        content = f.read()
-        lines = content.split('\n')
-except:
-    sys.exit(0)
-
-# Load rules for this file type
-rules = []
-with open(rules_file, 'r') as f:
-    for line in f:
-        line = line.strip()
-        if not line or line.startswith('#'):
-            continue
-        parts = [p.strip() for p in line.split('|')]
-        if len(parts) == 3:
-            file_pattern, check_type, details = parts
-            if re.search(file_pattern, file_path):
-                rules.append((check_type, details))
-
-if not rules:
-    sys.exit(0)
-
-def is_case(name, case_type):
-    if case_type == 'camelCase':
-        return bool(re.match(r'^[a-z][a-zA-Z0-9]*$', name))
-    elif case_type == 'PascalCase':
-        return bool(re.match(r'^[A-Z][a-zA-Z0-9]*$', name))
-    elif case_type == 'snake_case':
-        return bool(re.match(r'^[a-z][a-z0-9_]*$', name))
-    elif case_type == 'UPPER_SNAKE_CASE':
-        return bool(re.match(r'^[A-Z][A-Z0-9_]*$', name))
-    elif case_type == 'kebab-case':
-        return bool(re.match(r'^[a-z][a-z0-9-]*$', name))
-    return True
-
-for check_type, details in rules:
-    if check_type == 'interface_prefix' and details:
-        # Find interface declarations without prefix
-        for i, line in enumerate(lines):
-            match = re.match(r'^\s*(export\s+)?interface\s+(\w+)', line)
-            if match:
-                name = match.group(2)
-                if not name.startswith(details):
-                    warnings.append(f'Interface \"{name}\" (line {i+1}) should start with \"{details}\"')
-
-    elif check_type == 'function_case':
-        for i, line in enumerate(lines):
-            # Match function declarations
-            match = re.match(r'^\s*(?:export\s+)?(?:async\s+)?(?:def|function|func)\s+(\w+)', line)
-            if match:
-                name = match.group(1)
-                if name.startswith('_') or name.startswith('__'):
-                    continue  # Skip private/magic methods
-                if not is_case(name, details):
-                    warnings.append(f'Function \"{name}\" (line {i+1}) should be {details}')
-
-    elif check_type == 'class_case' or check_type == 'class_prefix':
-        for i, line in enumerate(lines):
-            match = re.match(r'^\s*(?:export\s+)?class\s+(\w+)', line)
-            if match:
-                name = match.group(1)
-                if check_type == 'class_case' and not is_case(name, details):
-                    warnings.append(f'Class \"{name}\" (line {i+1}) should be {details}')
+for check, details in checks:
+    if check == 'interface_prefix' and details:
+        for num, name in declarations(r'^\s*(?:export\s+)?interface\s+(\w+)'):
+            if not name.startswith(details):
+                warnings.append('Interface "%s" (line %d) should start with "%s"' % (name, num, details))
+    elif check == 'function_case' and details:
+        for num, name in declarations(r'^\s*(?:export\s+)?(?:async\s+)?(?:def|function|func)\s+(\w+)'):
+            if name.startswith('_'):
+                continue  # private / magic methods
+            if not is_case(name, details):
+                warnings.append('Function "%s" (line %d) should be %s' % (name, num, details))
+    elif check == 'class_case' and details:
+        for num, name in declarations(r'^\s*(?:export\s+)?class\s+(\w+)'):
+            if not is_case(name, details):
+                warnings.append('Class "%s" (line %d) should be %s' % (name, num, details))
 
 if warnings:
-    print('; '.join(warnings[:3]))
-else:
-    print('')
-" "$FILE_PATH" "$RULES_FILE" 2>/dev/null)
+    notify('NAMING CONVENTION in %s: %s' % (PATH.rsplit('/', 1)[-1], '; '.join(warnings[:3])[:300]))
+PYEOF
 
-if [ -n "$WARNINGS" ]; then
-  SAFE_WARNINGS=$(echo "$WARNINGS" | cut -c1-300 | sed 's/"/\\"/g')
-  BASENAME=$(basename "$FILE_PATH")
-  python3 -c "
-import json
-result = {
-    'hookSpecificOutput': {
-        'hookEventName': 'PostToolUse',
-        'notification': 'NAMING CONVENTION in ${BASENAME}: ${SAFE_WARNINGS}'
-    }
+  run_py "$PYCODE" "$RULES_FILE"
+  return 0
 }
-print(json.dumps(result))
-"
-fi
 
-exit 0
+main

@@ -4,103 +4,107 @@
 # =============================================================================
 # Restricts Claude to only access files within allowed directories.
 # Blocks access to sensitive system paths (SSH keys, credentials, etc.).
+#
+# Paths are compared in a canonical form (forward slashes, "." and ".."
+# resolved, /c/dir and C:\dir unified, case-insensitive on Windows), so
+# C:\Users\me\.ssh, /c/Users/me/.ssh and project/../../.ssh are all recognised.
 # =============================================================================
 
-INPUT=$(cat)
+HOOK_DIR=${BASH_SOURCE[0]%/*}; [ "$HOOK_DIR" = "${BASH_SOURCE[0]}" ] && HOOK_DIR=.
+if [ -f "$HOOK_DIR/_common.sh" ]; then . "$HOOK_DIR/_common.sh"; else . "$HOOK_DIR/../_common.sh" || exit 1; fi
 
-# Extract file path from hook JSON input
-FILE_PATH=$(python3 -c "
-import json, sys
-try:
-    d = json.loads(sys.argv[1])
-    inp = d.get('tool_input', {})
-    # Handle different tool input formats
-    path = inp.get('file_path', '') or inp.get('path', '') or inp.get('pattern', '')
-    print(path)
-except:
-    print('')
-" "$INPUT" 2>/dev/null)
+main() {
+  local ALLOWED_FILE BASE_DIR BLOCKED BLOCKED_PATHS CONFIGURED FILE_PATH HOME_DIR ORIGINAL_PATH
+  local PROJECT_DIR REPLY TARGET line
 
-if [ -z "$FILE_PATH" ]; then
-  exit 0
-fi
+  # canon PATH -> REPLY (absolute, normalised, no trailing slash)
+  canon() {
+    local p=$1 seg out="" root="/"
+    local -a stack=()
+    [[ $p == "~" || $p == "~/"* || $p == "~\\"* ]] && p=$HOME${p:1}
+    norm_path "$p"; p=$REPLY
+    if (( IS_WIN )) && [[ $p =~ ^/([A-Za-z])(/.*)?$ ]]; then
+      p="${BASH_REMATCH[1]}:${BASH_REMATCH[2]:-/}"                                     # /c/dir -> c:/dir
+    fi
+    if [[ $p =~ ^([A-Za-z]:)/?(.*)$ ]]; then
+      root="${BASH_REMATCH[1]}/"; p=${BASH_REMATCH[2]}
+    elif [[ $p != /* ]]; then
+      canon "$BASE_DIR/$p"; return
+    fi
+    # Resolve "." and ".." segment by segment (in memory: no process, no temp file)
+    p=$p/
+    while [ -n "$p" ]; do
+      seg=${p%%/*}; p=${p#*/}
+      case "$seg" in
+        ''|.) ;;
+        ..)   (( ${#stack[@]} )) && unset "stack[${#stack[@]}-1]" ;;
+        *)    stack+=("$seg") ;;
+      esac
+    done
+    for seg in "${stack[@]}"; do out+="/$seg"; done
+    REPLY="${root%/}$out"
+    [ -n "$REPLY" ] || REPLY=/
+  }
 
-# Resolve to absolute path if relative
-if [[ "$FILE_PATH" != /* ]]; then
-  FILE_PATH="$(pwd)/$FILE_PATH"
-fi
+  # Relative paths are resolved against the working directory reported by Claude Code
+  json_str cwd && [[ $REPLY == /* || $REPLY =~ ^[A-Za-z]:[\\/] ]] && BASE_DIR=$REPLY || BASE_DIR=$PWD
 
-# --- Always-blocked paths (sensitive system files) ---
-BLOCKED_PATHS=(
-  "$HOME/.ssh"
-  "$HOME/.gnupg"
-  "$HOME/.aws"
-  "$HOME/.config/gh"
-  "$HOME/.env"
-  "/etc/shadow"
-  "/etc/passwd"
-  "/etc/sudoers"
-)
-
-for BLOCKED in "${BLOCKED_PATHS[@]}"; do
-  if [[ "$FILE_PATH" == "$BLOCKED"* ]]; then
-    python3 -c "
-import json
-result = {
-    'hookSpecificOutput': {
-        'hookEventName': 'PreToolUse',
-        'permissionDecision': 'deny',
-        'permissionDecisionReason': 'FILE SCOPE GUARD: access to ${FILE_PATH} is BLOCKED (sensitive system path).'
-    }
-}
-print(json.dumps(result))
-"
-    exit 0
+  # Target: file_path (Read/Write/Edit), path (Grep/Glob), or an absolute Glob pattern
+  if ! get_file_path or_path; then
+    json_str pattern || return 0
+    [[ $REPLY == /* || $REPLY == "~"* || $REPLY =~ ^[A-Za-z]:[\\/] ]] || return 0
+    FILE_PATH=${REPLY%%[*?[]*}
   fi
-done
+  ORIGINAL_PATH=$FILE_PATH
+  canon "$FILE_PATH"; TARGET=$REPLY
 
-# --- Load allowed paths ---
-HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
-ALLOWED_FILE="$HOOK_DIR/allowed_paths.txt"
+  # Windows file systems are case-insensitive: compare paths accordingly
+  (( IS_WIN )) && shopt -s nocasematch
 
-if [ ! -f "$ALLOWED_FILE" ]; then
-  exit 0
-fi
+  # --- Always-blocked paths (sensitive system files) ---
+  canon "$HOME"; HOME_DIR=$REPLY
+  BLOCKED_PATHS=(
+    "$HOME_DIR/.ssh"
+    "$HOME_DIR/.gnupg"
+    "$HOME_DIR/.aws"
+    "$HOME_DIR/.config/gh"
+    "$HOME_DIR/.env"
+    "/etc/shadow"
+    "/etc/passwd"
+    "/etc/sudoers"
+  )
 
-# Get project directory (parent of .claude/)
-PROJECT_DIR=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+  for BLOCKED in "${BLOCKED_PATHS[@]}"; do
+    if [[ $TARGET == "$BLOCKED"* ]]; then
+      emit_pre deny "FILE SCOPE GUARD: access to ${ORIGINAL_PATH} is BLOCKED (sensitive system path)."
+      return 0
+    fi
+  done
 
-# Read allowed paths, replacing $PROJECT_DIR placeholder
-ALLOWED_PATHS=()
-while IFS= read -r line; do
-  [[ "$line" =~ ^#.*$ ]] && continue
-  [[ -z "${line// /}" ]] && continue
-  resolved="${line//\$PROJECT_DIR/$PROJECT_DIR}"
-  ALLOWED_PATHS+=("$resolved")
-done < "$ALLOWED_FILE"
+  # --- Load allowed paths ---
+  ALLOWED_FILE="$HOOK_DIR/allowed_paths.txt"
+  [ -f "$ALLOWED_FILE" ] || return 0
 
-# If no allowed paths configured, allow everything (except blocked above)
-if [ ${#ALLOWED_PATHS[@]} -eq 0 ]; then
-  exit 0
-fi
+  get_project_dir
 
-# Check if file is under an allowed path
-for ALLOWED in "${ALLOWED_PATHS[@]}"; do
-  if [[ "$FILE_PATH" == "$ALLOWED"* ]]; then
-    exit 0
-  fi
-done
+  # If no allowed paths are configured, allow everything (except blocked above)
+  CONFIGURED=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%$'\r'}
+    [[ $line =~ ^[[:space:]]*(#|$) ]] && continue
+    CONFIGURED=1
+    canon "${line//\$PROJECT_DIR/$PROJECT_DIR}"
+    # Allowed when equal to, or located under, an allowed directory
+    if [[ $TARGET == "$REPLY" || $TARGET == "${REPLY%/}"/* ]]; then
+      return 0
+    fi
+  done < "$ALLOWED_FILE"
 
-# File is outside allowed scope
-python3 -c "
-import json
-result = {
-    'hookSpecificOutput': {
-        'hookEventName': 'PreToolUse',
-        'permissionDecision': 'ask',
-        'permissionDecisionReason': 'FILE SCOPE GUARD: ${FILE_PATH} is outside allowed project scope. Confirm access?'
-    }
+  (( CONFIGURED )) || return 0
+
+  # File is outside allowed scope
+  emit_pre ask "FILE SCOPE GUARD: ${ORIGINAL_PATH} is outside allowed project scope. Confirm access?"
+  return 0
 }
-print(json.dumps(result))
-"
-exit 0
+
+main

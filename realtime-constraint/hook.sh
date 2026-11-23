@@ -4,65 +4,34 @@
 # =============================================================================
 # Detects patterns that break real-time determinism in embedded/RTOS code.
 # Checks: dynamic allocation, blocking I/O, exceptions, unbounded loops.
+#
+# Patterns (realtime_violations.txt) are Python regular expressions, matched
+# case-sensitively: lookaheads such as (?!.*timeout) are supported.
 # =============================================================================
 
-INPUT=$(cat)
+HOOK_DIR=${BASH_SOURCE[0]%/*}; [ "$HOOK_DIR" = "${BASH_SOURCE[0]}" ] && HOOK_DIR=.
+if [ -f "$HOOK_DIR/_common.sh" ]; then . "$HOOK_DIR/_common.sh"; else . "$HOOK_DIR/../_common.sh" || exit 1; fi
 
-TOOL_INFO=$(python3 -c "
-import json, sys
-try:
-    d = json.loads(sys.argv[1])
-    inp = d.get('tool_input', {})
-    file_path = inp.get('file_path', '')
-    content = inp.get('new_string', '') or inp.get('content', '')
-    print(file_path)
-    print(content)
-except:
-    print('')
-    print('')
-" "$INPUT" 2>/dev/null)
+main() {
+  local FILE_PATH PATTERNS_FILE PYCODE REPLY
 
-FILE_PATH=$(echo "$TOOL_INFO" | head -1)
-CONTENT=$(echo "$TOOL_INFO" | tail -n +2)
+  get_file_path || return 0
 
-if [ -z "$FILE_PATH" ] || [ -z "$CONTENT" ]; then
-  exit 0
-fi
+  # Only check C/C++/Rust embedded files
+  has_ext 'c|h|cpp|hpp|cc|hh|rs|ino' nocase || return 0
 
-# Only check C/C++/Rust embedded files
-if ! echo "$FILE_PATH" | grep -qiE '\.(c|h|cpp|hpp|cc|hh|rs|ino)$'; then
-  exit 0
-fi
+  PATTERNS_FILE="$HOOK_DIR/realtime_violations.txt"
+  [ -f "$PATTERNS_FILE" ] || return 0
 
-# --- Load violation patterns ---
-HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
-PATTERNS_FILE="$HOOK_DIR/realtime_violations.txt"
+  IFS= read -r -d '' PYCODE <<'PYEOF'
+matches = scan(ARGS[0], CONTENT) if CONTENT else []
+if matches:
+    ask('REAL-TIME VIOLATION: Non-deterministic pattern detected: %s. '
+        'This may break timing guarantees.' % '; '.join(matches)[:200])
+PYEOF
 
-if [ ! -f "$PATTERNS_FILE" ]; then
-  exit 0
-fi
-
-REGEX=$(grep -v '^#' "$PATTERNS_FILE" | grep -v '^[[:space:]]*$' | tr '\n' '|' | sed 's/|$//')
-
-if [ -z "$REGEX" ]; then
-  exit 0
-fi
-
-MATCH=$(echo "$CONTENT" | grep -nE "$REGEX" 2>/dev/null | head -3 | tr '\n' '; ' | cut -c1-200 | sed 's/"/\\"/g')
-
-if [ -n "$MATCH" ]; then
-  python3 -c "
-import json
-result = {
-    'hookSpecificOutput': {
-        'hookEventName': 'PreToolUse',
-        'permissionDecision': 'ask',
-        'permissionDecisionReason': 'REAL-TIME VIOLATION: Non-deterministic pattern detected: ${MATCH}. This may break timing guarantees.'
-    }
+  run_py "$PYCODE" "$PATTERNS_FILE"
+  return 0
 }
-print(json.dumps(result))
-"
-  exit 0
-fi
 
-exit 0
+main

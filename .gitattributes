@@ -1,0 +1,7 @@
+# Hooks run under bash (Git Bash, WSL, Cygwin, Linux, macOS): scripts and the
+# pattern/rule files they read must keep LF line endings on every platform,
+# even when core.autocrlf is enabled on Windows.
+*.sh    text eol=lf
+*.txt   text eol=lf
+*.json  text eol=lf
+*.md    text

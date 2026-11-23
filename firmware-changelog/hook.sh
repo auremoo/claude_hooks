@@ -10,43 +10,28 @@
 # Stored in .claude/firmware-changelog.md
 # =============================================================================
 
-INPUT=$(cat)
+HOOK_DIR=${BASH_SOURCE[0]%/*}; [ "$HOOK_DIR" = "${BASH_SOURCE[0]}" ] && HOOK_DIR=.
+if [ -f "$HOOK_DIR/_common.sh" ]; then . "$HOOK_DIR/_common.sh"; else . "$HOOK_DIR/../_common.sh" || exit 1; fi
 
-FILE_PATH=$(python3 -c "
-import json, sys
-try:
-    d = json.loads(sys.argv[1])
-    inp = d.get('tool_input', {})
-    print(inp.get('file_path', '') or '')
-except:
-    print('')
-" "$INPUT" 2>/dev/null)
+main() {
+  local FILE_PATH PROJECT_DIR PYCODE REPLY
 
-if [ -z "$FILE_PATH" ] || [ ! -f "$FILE_PATH" ]; then
-  exit 0
-fi
+  get_file_path || return 0
+  [ -f "$FILE_PATH" ] || return 0
 
-# Only track firmware/embedded files
-if ! echo "$FILE_PATH" | grep -qiE '\.(c|h|cpp|hpp|cc|s|asm|ld|ino|svd|dts|dtsi|cfg)$'; then
-  exit 0
-fi
+  # Only track firmware/embedded files
+  has_ext 'c|h|cpp|hpp|cc|s|asm|ld|lds|ino|svd|dts|dtsi|cfg' nocase || return 0
 
-# --- Analyze the modified file for hardware references ---
-ANALYSIS=$(python3 -c "
-import re, sys
-
-file_path = sys.argv[1]
+  # --- Analyze the modified file for hardware references ---
+  IFS= read -r -d '' PYCODE <<'PYEOF'
+content = read_file(PATH)
+if content is None:
+    sys.exit(0)
 tags = set()
 
-try:
-    with open(file_path, 'r', errors='ignore') as f:
-        content = f.read()
-except:
-    sys.exit(0)
-
-# Detect peripherals
-peripheral_patterns = {
-    'GPIO': r'\b(GPIO|gpio|Pin|PIN|HAL_GPIO|GPIOA|GPIOB|GPIOC|GPIOD)\b',
+# Peripherals
+PERIPHERALS = {
+    'GPIO': r'\b(GPIO|gpio|Pin|PIN|HAL_GPIO|GPIO[A-K])\b',
     'UART': r'\b(UART|USART|Serial|HAL_UART|LPUART)\b',
     'SPI': r'\b(SPI|HAL_SPI|spi_)\b',
     'I2C': r'\b(I2C|HAL_I2C|i2c_|TWI)\b',
@@ -60,61 +45,57 @@ peripheral_patterns = {
     'RTC': r'\b(RTC|HAL_RTC|rtc_)\b',
     'WATCHDOG': r'\b(WDG|IWDG|WWDG|watchdog|HAL_IWDG)\b',
     'FLASH': r'\b(FLASH|HAL_FLASH|flash_|NVM)\b',
-    'IRQ': r'\b(IRQ|NVIC|interrupt|ISR|IRQHandler|__interrupt)\b',
+    'IRQ': r'\b(IRQ|NVIC|interrupt|ISR|\w*IRQHandler|__interrupt)\b',
     'CLOCK': r'\b(RCC|SystemClock|HAL_RCC|clock_|PLL|HSE|HSI)\b',
 }
-
-for name, pattern in peripheral_patterns.items():
+for name, pattern in PERIPHERALS.items():
     if re.search(pattern, content):
         tags.add(name)
 
-# Detect register access
+# Register access
 if re.search(r'(->|\.)(CR|SR|DR|CCR|ARR|PSC|BSRR|IDR|ODR|MODER|OTYPER|OSPEEDR|PUPDR)\b', content):
     tags.add('REGISTERS')
 
-# Detect memory-mapped I/O
+# Memory-mapped I/O
 if re.search(r'#define\s+\w+_BASE\s+0x[0-9A-Fa-f]+', content):
     tags.add('MMIO')
 
-# Detect linker script changes
-if file_path.endswith('.ld') or file_path.endswith('.lds'):
+# Linker script changes
+if PATH.lower().endswith(('.ld', '.lds')):
     tags.add('LINKER')
-    if re.search(r'(FLASH|RAM|STACK|HEAP)', content):
-        if re.search(r'ORIGIN|LENGTH', content):
-            tags.add('MEMORY_MAP')
+    if re.search(r'(FLASH|RAM|STACK|HEAP)', content) and re.search(r'ORIGIN|LENGTH', content):
+        tags.add('MEMORY_MAP')
 
-if tags:
-    print(','.join(sorted(tags)))
-else:
-    print('')
-" "$FILE_PATH" 2>/dev/null)
+if not tags:
+    sys.exit(0)
 
-if [ -z "$ANALYSIS" ]; then
-  exit 0
-fi
+# --- Append to the firmware changelog ---
+import os, time
 
-# --- Append to firmware changelog ---
-PROJECT_DIR=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-CHANGELOG="$PROJECT_DIR/.claude/firmware-changelog.md"
-mkdir -p "$PROJECT_DIR/.claude"
+project_dir = ARGS[0]
+relative = PATH
+try:
+    candidate = os.path.relpath(PATH, project_dir).replace('\\', '/')
+    if not candidate.startswith('..'):
+        relative = candidate
+except ValueError:
+    pass  # file on another drive (Windows)
 
-TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
-DATE=$(date '+%Y-%m-%d')
-RELATIVE_PATH=$(python3 -c "import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))" "$FILE_PATH" "$PROJECT_DIR" 2>/dev/null)
+changelog = os.path.join(project_dir, '.claude', 'firmware-changelog.md')
+os.makedirs(os.path.dirname(changelog), exist_ok=True)
+existing = read_file(changelog) or ''
+date = time.strftime('%Y-%m-%d')
+with open(changelog, 'a', encoding='utf-8', newline='\n') as f:
+    if not existing:
+        f.write('# Firmware Changelog\n\n')
+    if '## ' + date not in existing:
+        f.write('\n## %s\n\n' % date)
+    f.write('- `%s` **%s** [%s]\n' % (time.strftime('%Y-%m-%d %H:%M:%S'), relative, ','.join(sorted(tags))))
+PYEOF
 
-# Create header if new file
-if [ ! -f "$CHANGELOG" ]; then
-  echo "# Firmware Changelog" > "$CHANGELOG"
-  echo "" >> "$CHANGELOG"
-fi
+  get_project_dir
+  run_py "$PYCODE" "$PROJECT_DIR"
+  return 0
+}
 
-# Add date section if needed
-if ! grep -q "## $DATE" "$CHANGELOG" 2>/dev/null; then
-  echo "" >> "$CHANGELOG"
-  echo "## $DATE" >> "$CHANGELOG"
-  echo "" >> "$CHANGELOG"
-fi
-
-echo "- \`$TIMESTAMP\` **$RELATIVE_PATH** [$ANALYSIS]" >> "$CHANGELOG"
-
-exit 0
+main

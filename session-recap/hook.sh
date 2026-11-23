@@ -6,79 +6,59 @@
 # during the current session. Useful for handoff or resuming later.
 # =============================================================================
 
-INPUT=$(cat)
+HOOK_DIR=${BASH_SOURCE[0]%/*}; [ "$HOOK_DIR" = "${BASH_SOURCE[0]}" ] && HOOK_DIR=.
+if [ -f "$HOOK_DIR/_common.sh" ]; then . "$HOOK_DIR/_common.sh"; else . "$HOOK_DIR/../_common.sh" || exit 1; fi
 
-TOOL_INFO=$(python3 -c "
-import json, sys
-try:
-    d = json.loads(sys.argv[1])
-    tool_name = d.get('tool_name', 'unknown')
-    inp = d.get('tool_input', {})
-    file_path = inp.get('file_path', '') or inp.get('path', '')
-    command = inp.get('command', '')
-    old_string = inp.get('old_string', '')[:80] if inp.get('old_string') else ''
-    new_string = inp.get('new_string', '')[:80] if inp.get('new_string') else ''
-    print(tool_name)
-    print(file_path)
-    print(command[:150] if command else '')
-    print(old_string)
-    print(new_string)
-except:
-    print('unknown')
-    print('')
-    print('')
-    print('')
-    print('')
-" "$INPUT" 2>/dev/null)
+main() {
+  local DATE ENTRY FILE_PATH FIRST_LINE NEW_STR OLD_STR PROJECT_DIR RECAP_FILE REPLY SAFE_CMD
+  local TIMESTAMP TOOL_NAME
 
-TOOL_NAME=$(echo "$TOOL_INFO" | sed -n '1p')
-FILE_PATH=$(echo "$TOOL_INFO" | sed -n '2p')
-COMMAND=$(echo "$TOOL_INFO" | sed -n '3p')
-OLD_STR=$(echo "$TOOL_INFO" | sed -n '4p')
-NEW_STR=$(echo "$TOOL_INFO" | sed -n '5p')
+  json_str tool_name; TOOL_NAME=$REPLY
 
-PROJECT_DIR=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-RECAP_FILE="$PROJECT_DIR/.claude/session-recap.md"
-mkdir -p "$PROJECT_DIR/.claude"
-
-TIMESTAMP=$(date '+%H:%M:%S')
-DATE=$(date '+%Y-%m-%d')
-
-# Create header if file doesn't exist or is from a different day
-if [ ! -f "$RECAP_FILE" ] || ! head -1 "$RECAP_FILE" 2>/dev/null | grep -q "$DATE"; then
-  cat > "$RECAP_FILE" << HEADER
-# Session Recap - $DATE
-
-## Actions
-
-HEADER
-fi
-
-# --- Append action based on tool type ---
-case "$TOOL_NAME" in
-  Write)
-    if [ -n "$FILE_PATH" ]; then
-      echo "- \`$TIMESTAMP\` **Created/Wrote** \`$FILE_PATH\`" >> "$RECAP_FILE"
-    fi
-    ;;
-  Edit)
-    if [ -n "$FILE_PATH" ]; then
-      DETAIL=""
+  # --- Build the entry for this tool call (nothing to log -> exit early) ---
+  ENTRY=""
+  case "$TOOL_NAME" in
+    Write)
+      get_file_path || return 0
+      ENTRY="**Created/Wrote** \`$FILE_PATH\`"
+      ;;
+    Edit)
+      get_file_path || return 0
+      ENTRY="**Edited** \`$FILE_PATH\`"
+      json_prefix old_string 80; OLD_STR=${REPLY//[$'\n\r\t']/ }
+      json_prefix new_string 80; NEW_STR=${REPLY//[$'\n\r\t']/ }
       if [ -n "$OLD_STR" ] && [ -n "$NEW_STR" ]; then
-        DETAIL=" — \`${OLD_STR}\` → \`${NEW_STR}\`"
+        ENTRY+=" — \`${OLD_STR}\` → \`${NEW_STR}\`"
       fi
-      echo "- \`$TIMESTAMP\` **Edited** \`$FILE_PATH\`${DETAIL}" >> "$RECAP_FILE"
-    fi
-    ;;
-  Bash)
-    if [ -n "$COMMAND" ]; then
+      ;;
+    Bash)
+      json_str command || return 0
       # Only log significant commands
-      if echo "$COMMAND" | grep -qE '(git|npm|pip|yarn|pnpm|dotnet|cargo|go |make|docker|terraform|kubectl)'; then
-        SAFE_CMD=$(echo "$COMMAND" | tr '\n' ' ' | cut -c1-120)
-        echo "- \`$TIMESTAMP\` **Ran** \`$SAFE_CMD\`" >> "$RECAP_FILE"
-      fi
-    fi
-    ;;
-esac
+      [[ $REPLY =~ (git|npm|pip|yarn|pnpm|dotnet|cargo|go\ |make|docker|terraform|kubectl) ]] || return 0
+      SAFE_CMD=${REPLY//[$'\n\r\t']/ }
+      ENTRY="**Ran** \`${SAFE_CMD:0:120}\`"
+      ;;
+    *)
+      return 0
+      ;;
+  esac
 
-exit 0
+  get_project_dir
+  ensure_dir "$PROJECT_DIR/.claude"
+  RECAP_FILE="$PROJECT_DIR/.claude/session-recap.md"
+
+  now TIMESTAMP '%H:%M:%S'
+  now DATE '%Y-%m-%d'
+
+  # Create header if file doesn't exist or is from a different day
+  FIRST_LINE=""
+  [ -f "$RECAP_FILE" ] && IFS= read -r FIRST_LINE < "$RECAP_FILE"
+  if [[ $FIRST_LINE != *"$DATE"* ]]; then
+    printf '# Session Recap - %s\n\n## Actions\n\n' "$DATE" > "$RECAP_FILE"
+  fi
+
+  printf -- '- `%s` %s\n' "$TIMESTAMP" "$ENTRY" >> "$RECAP_FILE"
+  return 0
+}
+
+main

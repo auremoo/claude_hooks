@@ -6,61 +6,57 @@
 # Provides audit trail of every change Claude makes to your project.
 # =============================================================================
 
-INPUT=$(cat)
+# --- Configuration ---
+MAX_LOG_LINES=1000    # Truncate the log when it grows beyond this...
+KEEP_LOG_LINES=500    # ...keeping the most recent lines
 
-# Parse tool info
-TOOL_INFO=$(python3 -c "
-import json, sys
-try:
-    d = json.loads(sys.argv[1])
-    tool_name = d.get('tool_name', 'unknown')
-    inp = d.get('tool_input', {})
-    file_path = inp.get('file_path', '') or inp.get('path', '')
-    command = inp.get('command', '')
-    print(tool_name)
-    print(file_path)
-    print(command[:200] if command else '')
-except:
-    print('unknown')
-    print('')
-    print('')
-" "$INPUT" 2>/dev/null)
+HOOK_DIR=${BASH_SOURCE[0]%/*}; [ "$HOOK_DIR" = "${BASH_SOURCE[0]}" ] && HOOK_DIR=.
+if [ -f "$HOOK_DIR/_common.sh" ]; then . "$HOOK_DIR/_common.sh"; else . "$HOOK_DIR/../_common.sh" || exit 1; fi
 
-TOOL_NAME=$(echo "$TOOL_INFO" | sed -n '1p')
-FILE_PATH=$(echo "$TOOL_INFO" | sed -n '2p')
-COMMAND=$(echo "$TOOL_INFO" | sed -n '3p')
+main() {
+  local ENTRY FILE_PATH LINE_COUNT LOG_FILE PROJECT_DIR RE REPLY S SAFE_CMD TIMESTAMP TOOL_NAME
 
-# --- Determine log entry ---
-PROJECT_DIR=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-LOG_DIR="$PROJECT_DIR/.claude"
-LOG_FILE="$LOG_DIR/changelog.log"
-mkdir -p "$LOG_DIR"
+  json_str tool_name; TOOL_NAME=$REPLY
 
-TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+  # --- Determine log entry (nothing to log -> exit early) ---
+  case "$TOOL_NAME" in
+    Edit|Write)
+      get_file_path || return 0
+      ENTRY="$TOOL_NAME: $FILE_PATH"
+      ;;
+    Bash)
+      json_str command || return 0
+      # Only log commands that modify files (git, mv, cp, mkdir, etc.)
+      S='[[:space:]]'
+      RE="(git$S+commit|git$S+push|git$S+merge|mv$S|cp$S|mkdir$S|touch$S|npm$S+install|pip$S+install|yarn$S+add)"
+      [[ $REPLY =~ $RE ]] || return 0
+      SAFE_CMD=${REPLY//[$'\n\r\t']/ }
+      ENTRY="Bash: ${SAFE_CMD:0:200}"
+      ;;
+    *)
+      return 0
+      ;;
+  esac
 
-case "$TOOL_NAME" in
-  Edit|Write)
-    if [ -n "$FILE_PATH" ]; then
-      echo "[$TIMESTAMP] $TOOL_NAME: $FILE_PATH" >> "$LOG_FILE"
+  get_project_dir
+  ensure_dir "$PROJECT_DIR/.claude"
+  LOG_FILE="$PROJECT_DIR/.claude/changelog.log"
+
+  now TIMESTAMP '%Y-%m-%d %H:%M:%S'
+  printf '[%s] %s\n' "$TIMESTAMP" "$ENTRY" >> "$LOG_FILE"
+
+  # --- Keep log file manageable ---
+  # Counting lines costs a process: do it on ~1 write out of 20, which is enough
+  # to keep the log bounded (it may briefly exceed MAX_LOG_LINES by a few lines).
+  if (( RANDOM % 20 == 0 )); then
+    LINE_COUNT=$(wc -l < "$LOG_FILE")
+    if (( ${LINE_COUNT:-0} > MAX_LOG_LINES )); then
+      tail -n "$KEEP_LOG_LINES" "$LOG_FILE" > "$LOG_FILE.tmp" && mv "$LOG_FILE.tmp" "$LOG_FILE"
     fi
-    ;;
-  Bash)
-    # Only log commands that modify files (git, mv, cp, mkdir, etc.)
-    if echo "$COMMAND" | grep -qE '(git\s+commit|git\s+push|git\s+merge|mv\s|cp\s|mkdir\s|touch\s|npm\s+install|pip\s+install|yarn\s+add)'; then
-      # Escape for safe logging
-      SAFE_CMD=$(echo "$COMMAND" | tr '\n' ' ' | cut -c1-200)
-      echo "[$TIMESTAMP] Bash: $SAFE_CMD" >> "$LOG_FILE"
-    fi
-    ;;
-esac
-
-# --- Keep log file manageable (max 1000 lines) ---
-if [ -f "$LOG_FILE" ]; then
-  LINE_COUNT=$(wc -l < "$LOG_FILE" | tr -d ' ')
-  if [ "$LINE_COUNT" -gt 1000 ]; then
-    tail -500 "$LOG_FILE" > "$LOG_FILE.tmp" && mv "$LOG_FILE.tmp" "$LOG_FILE"
   fi
-fi
 
-# PostToolUse hooks should always exit 0
-exit 0
+  # PostToolUse hooks should always return 0
+  return 0
+}
+
+main

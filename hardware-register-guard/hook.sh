@@ -6,85 +6,44 @@
 # watchdog, reset, flash write/erase, power management, boot config.
 # =============================================================================
 
-INPUT=$(cat)
+HOOK_DIR=${BASH_SOURCE[0]%/*}; [ "$HOOK_DIR" = "${BASH_SOURCE[0]}" ] && HOOK_DIR=.
+if [ -f "$HOOK_DIR/_common.sh" ]; then . "$HOOK_DIR/_common.sh"; else . "$HOOK_DIR/../_common.sh" || exit 1; fi
 
-TOOL_INFO=$(python3 -c "
-import json, sys
-try:
-    d = json.loads(sys.argv[1])
-    inp = d.get('tool_input', {})
-    file_path = inp.get('file_path', '')
-    content = inp.get('new_string', '') or inp.get('content', '')
-    print(file_path)
-    print(content)
-except:
-    print('')
-    print('')
-" "$INPUT" 2>/dev/null)
+main() {
+  local FILE_PATH PATTERNS_FILE PYCODE REPLY
 
-FILE_PATH=$(echo "$TOOL_INFO" | head -1)
-CONTENT=$(echo "$TOOL_INFO" | tail -n +2)
+  get_file_path || return 0
 
-if [ -z "$FILE_PATH" ] || [ -z "$CONTENT" ]; then
-  exit 0
-fi
+  # Only check C/C++ embedded files
+  has_ext 'c|h|cpp|hpp|cc|s|asm' nocase || return 0
 
-# Only check C/C++ embedded files
-if ! echo "$FILE_PATH" | grep -qiE '\.(c|h|cpp|hpp|cc|s|asm)$'; then
-  exit 0
-fi
+  PATTERNS_FILE="$HOOK_DIR/protected_registers.txt"
+  [ -f "$PATTERNS_FILE" ] || return 0
 
-# --- Load protected register patterns ---
-HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
-PATTERNS_FILE="$HOOK_DIR/protected_registers.txt"
-
-if [ ! -f "$PATTERNS_FILE" ]; then
-  exit 0
-fi
-
-# Build patterns and reasons
-MATCH_RESULT=$(python3 -c "
-import re, sys
-
-content = sys.argv[1]
-patterns_file = sys.argv[2]
+  IFS= read -r -d '' PYCODE <<'PYEOF'
+if not CONTENT:
+    sys.exit(0)
+lines = CONTENT.split('\n')
 matches = []
-
-with open(patterns_file, 'r') as f:
-    for line in f:
-        line = line.strip()
-        if not line or line.startswith('#'):
-            continue
-
-        parts = [p.strip() for p in line.split('|')]
-        pattern = parts[0]
-        reason = parts[1] if len(parts) > 1 else 'Protected register'
-
-        for content_line in content.split('\n'):
-            if re.search(re.escape(pattern).replace(r'\.\*', '.*').replace(r'\s\*', r'\s*'), content_line):
-                matches.append(f'{reason}: {content_line.strip()[:60]}')
-                break
-
+for rule in rules(ARGS[0]):
+    # pattern | reason   (pattern is a regular expression)
+    pattern, sep, reason = rule.rpartition(' | ')
+    if not sep:
+        pattern, reason = rule, 'Protected register'
+    pattern_rx = rx(pattern.strip())
+    if not pattern_rx:
+        continue
+    for line in lines:
+        if pattern_rx.search(line):
+            matches.append('%s: %s' % (reason.strip(), line.strip()[:60]))
+            break
 if matches:
-    print('; '.join(matches[:3]))
-else:
-    print('')
-" "$CONTENT" "$PATTERNS_FILE" 2>/dev/null)
+    ask('HW REGISTER GUARD: %s. Writing to protected hardware registers requires '
+        'explicit confirmation.' % '; '.join(matches[:3])[:300])
+PYEOF
 
-if [ -n "$MATCH_RESULT" ]; then
-  SAFE_MATCH=$(echo "$MATCH_RESULT" | cut -c1-300 | sed 's/"/\\"/g')
-  python3 -c "
-import json
-result = {
-    'hookSpecificOutput': {
-        'hookEventName': 'PreToolUse',
-        'permissionDecision': 'ask',
-        'permissionDecisionReason': 'HW REGISTER GUARD: ${SAFE_MATCH}. Writing to protected hardware registers requires explicit confirmation.'
-    }
+  run_py "$PYCODE" "$PATTERNS_FILE"
+  return 0
 }
-print(json.dumps(result))
-"
-  exit 0
-fi
 
-exit 0
+main

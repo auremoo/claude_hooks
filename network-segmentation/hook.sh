@@ -4,122 +4,75 @@
 # =============================================================================
 # Detects potential IT/OT network boundary violations in code and configs.
 # Prevents direct access from IT zone to OT/Safety zones per IEC 62443.
+#
+# Each IP address belongs to the most specific zone containing it: with
+# IT = 10.0.0.0/8 and OT = 10.135.0.0/16, the address 10.135.1.1 is OT only.
 # =============================================================================
 
-INPUT=$(cat)
+HOOK_DIR=${BASH_SOURCE[0]%/*}; [ "$HOOK_DIR" = "${BASH_SOURCE[0]}" ] && HOOK_DIR=.
+if [ -f "$HOOK_DIR/_common.sh" ]; then . "$HOOK_DIR/_common.sh"; else . "$HOOK_DIR/../_common.sh" || exit 1; fi
 
-TOOL_INFO=$(python3 -c "
-import json, sys
-try:
-    d = json.loads(sys.argv[1])
-    inp = d.get('tool_input', {})
-    file_path = inp.get('file_path', '')
-    content = inp.get('new_string', '') or inp.get('content', '') or inp.get('command', '')
-    print(file_path)
-    print(content)
-except:
-    print('')
-    print('')
-" "$INPUT" 2>/dev/null)
+main() {
+  local PYCODE ZONES_FILE
 
-FILE_PATH=$(echo "$TOOL_INFO" | head -1)
-CONTENT=$(echo "$TOOL_INFO" | tail -n +2)
+  # Fast exit (no python) when the tool call contains nothing looking like an IPv4
+  [[ $INPUT =~ [0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3} ]] || return 0
 
-if [ -z "$CONTENT" ]; then
-  exit 0
-fi
+  ZONES_FILE="$HOOK_DIR/network_zones.txt"
+  [ -f "$ZONES_FILE" ] || return 0
 
-# --- Load network zones ---
-HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
-ZONES_FILE="$HOOK_DIR/network_zones.txt"
+  IFS= read -r -d '' PYCODE <<'PYEOF'
+import ipaddress
 
-if [ ! -f "$ZONES_FILE" ]; then
-  exit 0
-fi
-
-WARNINGS=$(python3 -c "
-import re, sys, ipaddress
-
-zones_file = sys.argv[1]
-content = sys.argv[2]
-
-# Parse zone definitions
-zones = {}
-with open(zones_file, 'r') as f:
-    for line in f:
-        line = line.strip()
-        if not line or line.startswith('#'):
-            continue
-        if ' -> ' in line:
-            continue  # Skip cross-zone rules
-        parts = [p.strip() for p in line.split('|')]
-        if len(parts) >= 2:
-            zone_name = parts[0]
-            ip_range = parts[1]
-            try:
-                network = ipaddress.ip_network(ip_range, strict=False)
-                if zone_name not in zones:
-                    zones[zone_name] = []
-                zones[zone_name].append(network)
-            except:
-                pass
-
-if not zones:
+content = CONTENT or _s(INP.get('command'))
+if not content:
     sys.exit(0)
 
-# Find all IP addresses in content
-ip_pattern = r'\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b'
-found_ips = re.findall(ip_pattern, content)
-
-if not found_ips:
+# Zone definitions: ZONE_NAME | IP_RANGE | SECURITY_LEVEL
+networks = []
+for rule in rules(ARGS[0]):
+    if ' -> ' in rule:
+        continue  # cross-zone rules are documentation only
+    parts = [p.strip() for p in rule.split('|')]
+    if len(parts) >= 2:
+        try:
+            networks.append((ipaddress.ip_network(parts[1], strict=False), parts[0]))
+        except ValueError:
+            sys.stderr.write('claude-hooks: invalid IP range %r\n' % parts[1])
+if not networks:
     sys.exit(0)
 
-# Classify IPs by zone
-warnings = []
+# Classify every IP of the content by zone (most specific network wins)
 found_zones = set()
-
-for ip_str in found_ips:
+for ip_str in set(re.findall(r'\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b', content)):
     try:
         ip = ipaddress.ip_address(ip_str)
-        for zone_name, networks in zones.items():
-            for network in networks:
-                if ip in network:
-                    found_zones.add(zone_name)
-    except:
+    except ValueError:
         continue
+    containing = [(net.prefixlen, zone) for net, zone in networks
+                  if ip.version == net.version and ip in net]
+    if containing:
+        found_zones.add(max(containing)[1])
 
-# Check for cross-zone access
+warnings = []
+# Cross-zone access
 if 'IT' in found_zones and 'OT' in found_zones:
     warnings.append('IT and OT IPs in same context (cross-zone access)')
 if 'IT' in found_zones and 'SAFETY' in found_zones:
     warnings.append('IT and SAFETY IPs in same context (CRITICAL violation)')
 if 'OT' in found_zones and 'SAFETY' in found_zones:
     warnings.append('OT and SAFETY IPs in same context (verify conduit)')
-
-# Check for SAFETY zone access in general code
+# SAFETY zone access in general code
 if 'SAFETY' in found_zones:
     warnings.append('Code references SAFETY zone IPs (SIL-rated access only)')
 
 if warnings:
-    print('; '.join(warnings[:3]))
-else:
-    print('')
-" "$ZONES_FILE" "$CONTENT" 2>/dev/null)
+    ask('NETWORK SEGMENTATION: %s -- ISA/IEC 62443 zone boundary violation.'
+        % '; '.join(warnings[:3])[:300])
+PYEOF
 
-if [ -n "$WARNINGS" ]; then
-  SAFE_WARNINGS=$(echo "$WARNINGS" | cut -c1-300 | sed 's/"/\\"/g')
-  python3 -c "
-import json
-result = {
-    'hookSpecificOutput': {
-        'hookEventName': 'PreToolUse',
-        'permissionDecision': 'ask',
-        'permissionDecisionReason': 'NETWORK SEGMENTATION: ${SAFE_WARNINGS} -- ISA/IEC 62443 zone boundary violation.'
-    }
+  run_py "$PYCODE" "$ZONES_FILE"
+  return 0
 }
-print(json.dumps(result))
-"
-  exit 0
-fi
 
-exit 0
+main

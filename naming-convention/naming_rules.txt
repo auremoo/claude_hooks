@@ -8,6 +8,7 @@
 # DETAILS: expected convention or prefix
 #
 # Cases: camelCase, PascalCase, snake_case, UPPER_SNAKE_CASE, kebab-case
+# Several accepted cases can be combined with "/": camelCase/PascalCase
 # =============================================================================
 
 # --- TypeScript/JavaScript ---
@@ -27,5 +28,5 @@
 \.cs$ | variable_case | camelCase
 
 # --- Go ---
-\.go$ | function_case | PascalCase
+\.go$ | function_case | camelCase/PascalCase
 \.go$ | variable_case | camelCase

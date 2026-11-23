@@ -6,51 +6,57 @@
 # Backups are stored in .claude/backups/ with timestamps.
 # =============================================================================
 
-INPUT=$(cat)
+# --- Configuration ---
+MAX_BACKUPS=20   # Backups kept per file
 
-FILE_PATH=$(python3 -c "
-import json, sys
-try:
-    d = json.loads(sys.argv[1])
-    inp = d.get('tool_input', {})
-    print(inp.get('file_path', '') or '')
-except:
-    print('')
-" "$INPUT" 2>/dev/null)
+HOOK_DIR=${BASH_SOURCE[0]%/*}; [ "$HOOK_DIR" = "${BASH_SOURCE[0]}" ] && HOOK_DIR=.
+if [ -f "$HOOK_DIR/_common.sh" ]; then . "$HOOK_DIR/_common.sh"; else . "$HOOK_DIR/../_common.sh" || exit 1; fi
 
-# No file path or file doesn't exist yet (new file) -> skip
-if [ -z "$FILE_PATH" ] || [ ! -f "$FILE_PATH" ]; then
-  exit 0
-fi
+main() {
+  local BACKUPS BACKUP_DIR BACKUP_FILE D EXCESS FILE_PATH N PROJECT_DIR RELATIVE_PATH REPLY
+  local TIMESTAMP
 
-# --- Create backup ---
-PROJECT_DIR=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-BACKUP_DIR="$PROJECT_DIR/.claude/backups"
-mkdir -p "$BACKUP_DIR"
+  # No file path or file doesn't exist yet (new file) -> skip
+  get_file_path || return 0
+  [ -f "$FILE_PATH" ] || return 0
 
-# Generate backup filename: original-name.TIMESTAMP.bak
-BASENAME=$(basename "$FILE_PATH")
-RELATIVE_PATH=$(python3 -c "
-import os, sys
-try:
-    rel = os.path.relpath(sys.argv[1], sys.argv[2])
-    # Replace path separators with underscores for flat backup storage
-    print(rel.replace('/', '_').replace('\\\\', '_'))
-except:
-    print(os.path.basename(sys.argv[1]))
-" "$FILE_PATH" "$PROJECT_DIR" 2>/dev/null)
+  # --- Create backup ---
+  get_project_dir
+  BACKUP_DIR="$PROJECT_DIR/.claude/backups"
+  ensure_dir "$BACKUP_DIR"
 
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-BACKUP_FILE="$BACKUP_DIR/${RELATIVE_PATH}.${TIMESTAMP}.bak"
+  # Backup name: path relative to the project, separators replaced by "_"
+  (( IS_WIN )) && shopt -s nocasematch
+  if [[ $FILE_PATH == "$PROJECT_DIR"/* ]]; then
+    RELATIVE_PATH=${FILE_PATH:${#PROJECT_DIR}+1}
+  else
+    RELATIVE_PATH=$FILE_PATH
+  fi
+  shopt -u nocasematch
+  RELATIVE_PATH=${RELATIVE_PATH//[\/:]/_}
 
-cp "$FILE_PATH" "$BACKUP_FILE" 2>/dev/null
+  now TIMESTAMP '%Y%m%d_%H%M%S'
+  BACKUP_FILE="$BACKUP_DIR/${RELATIVE_PATH}.${TIMESTAMP}.bak"
+  # Several edits within the same second: keep every state (…_1.bak, …_2.bak)
+  N=0
+  while [ -e "$BACKUP_FILE" ]; do
+    N=$((N + 1))
+    BACKUP_FILE="$BACKUP_DIR/${RELATIVE_PATH}.${TIMESTAMP}_${N}.bak"
+  done
 
-# --- Cleanup old backups (keep last 20 per file) ---
-PATTERN="$BACKUP_DIR/${RELATIVE_PATH}.*.bak"
-BACKUP_COUNT=$(ls -1 $PATTERN 2>/dev/null | wc -l | tr -d ' ')
-if [ "$BACKUP_COUNT" -gt 20 ]; then
-  ls -1t $PATTERN 2>/dev/null | tail -n +21 | xargs rm -f 2>/dev/null
-fi
+  cp "$FILE_PATH" "$BACKUP_FILE" 2>/dev/null
 
-# Allow the operation to proceed (backup is silent)
-exit 0
+  # --- Cleanup old backups (keep the last MAX_BACKUPS per file) ---
+  # Timestamped names sort chronologically, so the glob lists oldest first.
+  D='[0-9]'
+  BACKUPS=("$BACKUP_DIR/$RELATIVE_PATH".$D$D$D$D$D$D$D${D}_$D$D$D$D$D$D*.bak)
+  EXCESS=$(( ${#BACKUPS[@]} - MAX_BACKUPS ))
+  if (( EXCESS > 0 )); then
+    rm -f -- "${BACKUPS[@]:0:EXCESS}" 2>/dev/null
+  fi
+
+  # Allow the operation to proceed (backup is silent)
+  return 0
+}
+
+main

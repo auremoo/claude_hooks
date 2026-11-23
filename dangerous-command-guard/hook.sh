@@ -6,54 +6,31 @@
 # If a dangerous command is detected, asks user for confirmation.
 # =============================================================================
 
-INPUT=$(cat)
+HOOK_DIR=${BASH_SOURCE[0]%/*}; [ "$HOOK_DIR" = "${BASH_SOURCE[0]}" ] && HOOK_DIR=.
+if [ -f "$HOOK_DIR/_common.sh" ]; then . "$HOOK_DIR/_common.sh"; else . "$HOOK_DIR/../_common.sh" || exit 1; fi
 
-# Extract the command from hook JSON input
-COMMAND=$(python3 -c "
-import json, sys
-try:
-    d = json.loads(sys.argv[1])
-    inp = d.get('tool_input', {})
-    print(inp.get('command', ''))
-except:
-    print('')
-" "$INPUT" 2>/dev/null)
+main() {
+  local COMMAND MATCH PATTERNS_FILE RC REGEX REPLY
 
-if [ -z "$COMMAND" ]; then
-  exit 0
-fi
+  json_str command || return 0
+  COMMAND=$REPLY
+  [ -n "$COMMAND" ] || return 0
 
-# --- Load patterns ---
-HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
-PATTERNS_FILE="$HOOK_DIR/dangerous_patterns.txt"
+  # Regex built from non-empty, non-comment lines of the patterns file
+  PATTERNS_FILE="$HOOK_DIR/dangerous_patterns.txt"
+  load_patterns "$PATTERNS_FILE" || return 0
 
-if [ ! -f "$PATTERNS_FILE" ]; then
-  exit 0
-fi
-
-# Build regex from non-empty, non-comment lines
-REGEX=$(grep -v '^#' "$PATTERNS_FILE" | grep -v '^[[:space:]]*$' | tr '\n' '|' | sed 's/|$//')
-
-if [ -z "$REGEX" ]; then
-  exit 0
-fi
-
-# --- Scan command ---
-MATCH=$(echo "$COMMAND" | grep -iE "$REGEX" 2>/dev/null | head -1 | cut -c1-200 | sed 's/"/\\"/g')
-
-if [ -n "$MATCH" ]; then
-  python3 -c "
-import json
-result = {
-    'hookSpecificOutput': {
-        'hookEventName': 'PreToolUse',
-        'permissionDecision': 'ask',
-        'permissionDecisionReason': 'DANGEROUS COMMAND detected: ${MATCH}'
-    }
+  # --- Scan command ---
+  # Most commands are harmless: when bash itself can prove it, grep is not started
+  surely_no_match "$COMMAND" "$REGEX" && return 0
+  MATCH=$(grep -iE -m1 -e "$REGEX" <<<"$COMMAND" 2>/dev/null)
+  RC=$?
+  if (( RC >= 2 )); then
+    grep_failed dangerous-command-guard "$PATTERNS_FILE"
+  elif [ -n "$MATCH" ]; then
+    emit_pre ask "DANGEROUS COMMAND detected: ${MATCH:0:200}"
+  fi
+  return 0
 }
-print(json.dumps(result))
-"
-  exit 0
-fi
 
-exit 0
+main

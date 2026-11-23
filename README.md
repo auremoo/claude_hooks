@@ -10,6 +10,9 @@ Collection de 26 hooks [Claude Code](https://docs.anthropic.com/en/docs/claude-c
 ```
 claude-hooks/
 ├── install.sh                          # Installateur generique (auto-decouverte)
+├── _common.sh                          # Bibliotheque partagee par tous les hooks
+├── _dispatch.sh                        # Dispatcher : un seul processus par appel d'outil
+├── tests/run-tests.sh                  # Suite de tests (bac a sable git jetable)
 ├── README.md
 │
 │   ── SECURITE & PROTECTION ──
@@ -72,8 +75,23 @@ bash install.sh .
 L'installateur :
 - Auto-decouvre les hooks depuis les sous-dossiers (via `hook.json`)
 - Cree `.claude/hooks/` et `.claude/settings.json` dans le projet cible
+- Copie la bibliotheque partagee `_common.sh` et le dispatcher `_dispatch.sh` a cote des hooks
+- Enregistre **un dispatcher par evenement** (`PreToolUse`, `PostToolUse`) dans `settings.json` ; la liste des hooks qu'il execute est ecrite dans `.claude/hooks/_hooks.conf`. Les hooks asynchrones (`auto-test-runner`) gardent leur propre entree.
 - **Merge** la config si `settings.json` existe deja (preserve les autres cles)
-- **Idempotent** : relancer n'ecrase pas les fichiers de config utilisateur
+- **Idempotent** : relancer met a jour les scripts et leur entree `settings.json`, sans jamais ecraser les fichiers de config utilisateur (`*.txt`)
+
+> Les seuils definis en tete de certains scripts (`MAX_SIZE_KB`, `WARN_LINES`, ...) vivent dans le script installe : ils sont a reappliquer apres une reinstallation.
+
+### Mode autonome (un enregistrement par hook)
+
+```bash
+bash install.sh --standalone /chemin/vers/mon-projet                  # tous les hooks
+bash install.sh --standalone /chemin/vers/mon-projet check-sensitive  # un seul
+```
+
+Chaque hook recoit alors sa propre entree `settings.json`, avec son matcher et son timeout : un processus par hook a chaque appel d'outil (plus lent), utile pour isoler ou deboguer un hook. Les deux modes se melangent et se changent en relancant l'installateur ; chaque script reste executable seul (`bash .claude/hooks/<hook>.sh < entree.json`).
+
+Pour ne faire tourner qu'un hook a travers le dispatcher : `CLAUDE_HOOKS_ONLY=<hook> bash .claude/hooks/_dispatch.sh PreToolUse < entree.json`.
 
 ---
 
@@ -96,6 +114,16 @@ L'installateur :
 - Hostnames / FQDN internes
 - Credentials hardcodes
 - Donnees personnelles (emails, badges)
+
+**Ce qui est scanne** :
+
+| Appel | Contenu scanne |
+|-------|----------------|
+| Read / Edit / Write, Grep sur un fichier | Le fichier |
+| Grep sur un dossier, mode `content` | Les lignes que la recherche renverrait a Claude. Si le motif ne peut pas etre reproduit fidelement avec `grep` (`\d`, `(?...)`, multiligne...), tous les fichiers parcourus sont scannes |
+| Grep sur un dossier, autres modes | Rien : seuls des noms de fichiers ou des compteurs sont renvoyes (la lecture ulterieure de ces fichiers repasse par le hook) |
+
+Les dossiers `.git`, `node_modules` et `.claude` sont ignores. Le scan d'un dossier est borne a `SCAN_TIMEOUT` (3 s) : au-dela, le hook demande confirmation au lieu de laisser passer.
 
 **Configuration** — editer `.claude/hooks/sensitive_patterns.txt` :
 
@@ -144,6 +172,10 @@ FilialeDuClient
 **Branches protegees par defaut** (configurable dans `protected_branches.txt`) :
 `main`, `master`, `production`, `prod`, `release`
 
+**Cas detectes** :
+- `git commit` / `git push` quand la branche courante est protegee (y compris `git -C dir commit`, `git -c cle=valeur commit`)
+- `git push` nommant explicitement une branche protegee depuis une autre branche (`git push origin HEAD:main`)
+
 ---
 
 ## 4. file-scope-guard
@@ -161,6 +193,8 @@ FilialeDuClient
 - **Autorise** : fichiers sous `$PROJECT_DIR` (par defaut)
 - **Demande confirmation** : tout le reste
 
+Les chemins sont compares sous forme canonique : `..` resolus (pas de contournement par `projet/../../.ssh`), comparaison par dossier entier (`/projet-bis` n'est pas sous `/projet`), et sous Windows `C:\dossier`, `/c/dossier` et la casse sont unifies.
+
 **Configuration** — editer `allowed_paths.txt` :
 
 ```
@@ -173,7 +207,7 @@ $PROJECT_DIR
 
 ## 5. no-secret-commit
 
-> Scanne les fichiers stages pour detecter des secrets avant un git commit.
+> Scanne ce qui va etre commite pour detecter des secrets avant un git commit.
 
 | Propriete | Valeur |
 |-----------|--------|
@@ -188,6 +222,16 @@ $PROJECT_DIR
 - **Cles privees** : RSA, EC, PGP, OpenSSH
 - **Variables d'env** : `*_SECRET`, `*_TOKEN`, `*_PASSWORD`
 
+**Contenu analyse** (lignes ajoutees uniquement, fichiers binaires ignores) :
+
+| Commande | Contenu scanne |
+|----------|----------------|
+| `git commit ...` | Le diff stage |
+| `git commit -a` / `-am ...` | Diff stage + modifications non stagees des fichiers suivis |
+| `git add ... && git commit ...` | Idem + fichiers non suivis (hors `.gitignore`), car rien n'est encore stage quand le hook s'execute |
+
+Le scan est un unique pipeline `git diff | sed | grep`, quel que soit le nombre de fichiers.
+
 ---
 
 ## 6. auto-backup
@@ -201,7 +245,8 @@ $PROJECT_DIR
 | **Action** | Silencieux — copie dans `.claude/backups/` |
 
 - Sauvegarde dans `.claude/backups/<nom_fichier>.<timestamp>.bak`
-- Conserve les **20 derniers backups** par fichier (nettoyage auto)
+- Conserve les **20 derniers backups** par fichier (nettoyage auto, `MAX_BACKUPS` dans `hook.sh`)
+- Plusieurs modifications dans la meme seconde : chaque etat est conserve (suffixe `_1`, `_2`...)
 - Ne s'active que pour les fichiers existants
 
 **Restaurer un fichier** :
@@ -223,16 +268,16 @@ cp .claude/backups/src_index.ts.20240315_143022.bak src/index.ts
 |-----------|--------|
 | **Event** | `PostToolUse` |
 | **Matcher** | `Edit\|Write` |
-| **Timeout** | 30s |
-| **Action** | Silencieux — log les resultats dans `.claude/test-results.log` |
+| **Execution** | Asynchrone (`"async": true`) : les tests tournent en arriere-plan sans bloquer Claude |
+| **Action** | Log dans `.claude/test-results.log` ; silencieux si les tests passent, **echec signale a Claude** (et a l'utilisateur) avec les dernieres lignes de la sortie des tests |
 
 **Frameworks supportes** :
-- **JavaScript/TypeScript** : Jest, Vitest (detecte `*.test.ts`, `*.spec.js`, `__tests__/`)
+- **JavaScript/TypeScript** : Vitest ou Jest, selon le binaire present dans le `node_modules/.bin` le plus proche (detecte `*.test.ts`, `*.spec.js`, `__tests__/`) ; aucun telechargement via `npx` si aucun n'est installe
 - **Python** : Pytest (detecte `test_*.py`, `*_test.py`, `tests/`)
 - **Go** : `go test` (detecte `*_test.go`)
 - **C#** : xUnit/NUnit (detecte `*Tests.cs`, `*Test.cs`)
 
-**Fonctionnement** : quand `src/utils/helper.ts` est modifie, le hook cherche `src/utils/helper.test.ts` ou `__tests__/helper.test.ts` et le lance.
+**Fonctionnement** : quand `src/utils/helper.ts` est modifie, le hook cherche `src/utils/helper.test.ts` ou `__tests__/helper.test.ts` et le lance. Le statut PASS/FAIL est le vrai code de sortie du lanceur de tests ; une execution est interrompue apres `TEST_TIMEOUT` (120 s, si `timeout` GNU est disponible).
 
 ---
 
@@ -244,14 +289,16 @@ cp .claude/backups/src_index.ts.20240315_143022.bak src/index.ts
 |-----------|--------|
 | **Event** | `PostToolUse` |
 | **Matcher** | `Read\|Grep` |
-| **Action** | Notification aux seuils configures |
+| **Action** | Notification au franchissement de chaque seuil |
 
 **Seuils par defaut** (configurable dans `hook.sh`) :
 - **Warning** : 10 000 lignes lues
 - **Alert** : 20 000 lignes lues
 
+**Comptage** : lignes reellement lues (parametre `limit` de Read, 2000 lignes par defaut). Le compteur repart de zero a chaque nouvelle session (`session_id`) et chaque seuil n'est signale qu'une fois, au moment ou il est franchi.
+
 **Fichiers generes** :
-- `.claude/context-usage.txt` — compteur cumule
+- `.claude/context-usage.txt` — compteur cumule de la session
 - `.claude/context-usage.log` — detail de chaque lecture
 
 ---
@@ -320,9 +367,11 @@ Format : `[timestamp] ToolName: file_or_command`. Auto-tronque a 500 lignes quan
 | **Matcher** | `Bash` |
 | **Action** | Demande confirmation si non conforme |
 
-**Format** : `type(scope): description`
+**Format** : `type(scope): description` (un `!` avant `:` signale un breaking change : `feat(api)!: ...`)
 
 **Types** : `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`
+
+**Formes reconnues** : `-m "msg"`, `-m 'msg'`, `-am "msg"`, `--message="msg"` et les messages en heredoc (`git commit -m "$(cat <<'EOF' ... EOF)"`, la forme utilisee par Claude Code). `--amend` et les commits sans message en ligne sont ignores.
 
 ---
 
@@ -364,6 +413,8 @@ Format : `[timestamp] ToolName: file_or_command`. Auto-tronque a 500 lignes quan
 | Profondeur d'imbrication | 4 niveaux |
 | Nombre de parametres | 5 |
 
+Analyse heuristique : indentation pour Python/Ruby, accolades pour la famille C (TS/JS, Go, C#, Java, C/C++, Rust, PHP). L'imbrication compte les structures de controle (`if`/`for`/`while`/`try`...) reellement emboitees dans une meme fonction ; les parametres sont comptes sur les declarations, pas sur les appels.
+
 ---
 
 ## 15. import-validator
@@ -401,7 +452,9 @@ Format : `[timestamp] ToolName: file_or_command`. Auto-tronque a 500 lignes quan
 | TS/JS | camelCase | — | `I` prefix | UPPER_SNAKE |
 | Python | snake_case | PascalCase | — | UPPER_SNAKE |
 | C# | PascalCase | — | `I` prefix | — |
-| Go | PascalCase | — | — | — |
+| Go | camelCase / PascalCase | — | — | — |
+
+Controles effectivement appliques : `function_case` (declarations `def` / `function` / `func`), `class_case` et `interface_prefix`. Les types `constant_case`, `variable_case` et `class_prefix` sont acceptes dans `naming_rules.txt` mais pas encore verifies. Plusieurs casses peuvent etre autorisees avec `/` (`camelCase/PascalCase`).
 
 ---
 
@@ -519,6 +572,8 @@ Format : `[timestamp] ToolName: file_or_command`. Auto-tronque a 500 lignes quan
 
 **Violations** : IPs IT et OT dans le meme contexte, acces direct IT → SAFETY, code referencant la zone SAFETY.
 
+Quand des plages se recouvrent, une adresse appartient a la zone la plus specifique : avec IT = `10.0.0.0/8` et OT = `10.135.0.0/16`, `10.135.1.1` est OT uniquement.
+
 ---
 
 ## 23. realtime-constraint
@@ -632,9 +687,49 @@ Format : `[timestamp] ToolName: file_or_command`. Auto-tronque a 500 lignes quan
 
 # Pre-requis
 
-- **bash** (Cygwin, Git Bash, WSL, ou Linux/macOS natif)
-- **python3** (utilise a la place de `jq` pour le parsing JSON)
+- **bash** >= 3.2 (Cygwin, Git Bash, WSL, ou Linux/macOS natif) avec `grep` et `sed`
+- **python3** pour l'installateur et pour les hooks qui analysent du contenu : `architecture-boundary`, `import-validator`, `env-guard`, `complexity-guard`, `naming-convention`, `docker-best-practices`, `plc-safety-guard`, `protocol-validator`, `network-segmentation`, `realtime-constraint`, `firmware-changelog`, `safety-standard-check`, `hardware-register-guard`. Les 13 autres hooks n'utilisent que bash.
 - **git** (pour les hooks utilisant l'historique ou les branches)
+
+## Fonctionnement & performances
+
+Les hooks s'executent a **chaque** appel d'outil : leur cout se paie donc en permanence. Sous Windows, demarrer bash coute ~70 ms, un `fork` ~20 ms et python jusqu'a 300 ms ; tout est concu pour en lancer le moins possible.
+
+- **Un processus par appel d'outil** : `_dispatch.sh` lit le JSON une fois, puis execute dans son propre processus, l'un apres l'autre, tous les hooks concernes par l'outil (~3 ms par hook en bash pur). Il fusionne leurs reponses en un seul document : en `PreToolUse`, `deny` l'emporte sur `ask` et les motifs sont joints ; en `PostToolUse`, les avertissements sont concatenes.
+- **Extraction JSON en bash pur** : `_common.sh` extrait les champs simples (`tool_name`, `file_path`, `command`...) avec les seules primitives de bash.
+- **Un seul python, seulement si necessaire** : un hook ne demande une analyse python que si elle est utile (extension concernee, regle applicable au fichier, mot-cle ou adresse IP present). Les analyses demandees par les hooks d'un meme appel sont mises en file puis executees par un unique interpreteur.
+- **`grep` evite quand c'est prouvable** : pour les commandes Bash, le moteur de regex de bash verifie d'abord un sur-ensemble des motifs dangereux ; `grep` n'est lance que s'il subsiste un doute (verdict identique a `grep -iE`, verifie par les tests).
+- Les reponses JSON sont construites par echappement (`json_escape` / `json.dumps`), jamais en inserant du texte (contenu de fichier, commande, chemin) dans du code.
+- Les avertissements PostToolUse sont emis dans `systemMessage` (affiche a l'utilisateur) et `additionalContext` (transmis a Claude).
+
+Duree du traitement de tous les hooks pour un appel d'outil, mesuree sous Windows / Git Bash avec les 26 hooks installes :
+
+| Appel d'outil | Version d'origine | Mode autonome | Dispatcher (defaut) |
+|---------------|-------------------|---------------|---------------------|
+| Edit d'un `.py` (avant / apres) | 3,5 s / 2,3 s | 0,66 s / 0,60 s | 0,53 s / 0,54 s |
+| Edit d'un `.md` (avant / apres) | 3,3 s / 3,1 s | 0,48 s / 0,25 s | 0,23 s / 0,18 s |
+| Commande Bash (avant / apres) | 1,6 s / 1,3 s | 0,26 s / 0,13 s | 0,17 s / 0,13 s |
+| Read d'un `.py` (avant / apres) | 1,3 s / 0,7 s | 0,52 s / 0,18 s | 0,51 s / 0,18 s |
+
+Le plancher restant est le demarrage de bash (~70 ms) et, quand une analyse de contenu est requise, celui de python. Installation complete : 73 s → 1 s.
+
+### Ecrire ou modifier un hook
+
+Pour pouvoir partager le processus du dispatcher, un hook respecte quatre regles (verifiees par la suite de tests) :
+
+1. son corps est une fonction `main()`, appelee en derniere ligne du fichier ;
+2. toute variable qu'il affecte est declaree `local` (seules les constantes de configuration sont definies en tete de fichier) ;
+3. il se termine par `return 0`, jamais par `exit` (qui interromprait les hooks suivants) ;
+4. `run_py`, s'il est utilise, est sa derniere action.
+
+## Tests
+
+```bash
+bash tests/run-tests.sh               # -v pour le detail
+bash tests/run-tests.sh --standalone  # execute chaque script directement, sans dispatcher
+```
+
+Installe tous les hooks dans un depot git jetable, puis envoie a chaque hook le JSON que Claude Code lui fournirait et verifie la decision (`ask` / `deny` / avertissement / silence), les journaux produits et la validite du JSON emis. La suite couvre aussi l'installateur (idempotence, changement de mode), la fusion des reponses par le dispatcher, l'absence de fuite d'etat entre hooks et l'equivalence du pre-filtre avec `grep -iE`.
 
 ## Fichiers generes (a ajouter au `.gitignore`)
 
@@ -650,8 +745,9 @@ Format : `[timestamp] ToolName: file_or_command`. Auto-tronque a 500 lignes quan
 ## Conseils
 
 - Combiner les hooks avec des regles dans `CLAUDE.md` pour une protection contextuelle
-- Les hooks ne ralentissent pas le workflow : timeout de 5-10s, `exit 0` si aucun match
-- Les patterns sont case-insensitive (`grep -iE`) sauf indication contraire
+- N'installer que les hooks utiles au projet : moins de confirmations inutiles, et en mode autonome un processus de moins a chaque appel d'outil
+- Syntaxe des patterns : `grep -iE` (insensible a la casse) pour `sensitive_patterns.txt`, `dangerous_patterns.txt` et `secret_patterns.txt` ; expressions regulieres Python (lookaheads `(?!...)` acceptes) pour tous les autres fichiers, insensibles a la casse sauf `realtime_violations.txt`, `safety_rules.txt` et `protected_registers.txt`
+- Une expression reguliere invalide est signalee (message a l'utilisateur ou sur stderr) au lieu de desactiver silencieusement le hook
 - Tous les fichiers de config (patterns, rules, zones) sont editables apres installation
 
 ---

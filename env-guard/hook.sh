@@ -6,96 +6,47 @@
 # in dev configs, localhost in production files, etc.
 # =============================================================================
 
-INPUT=$(cat)
+HOOK_DIR=${BASH_SOURCE[0]%/*}; [ "$HOOK_DIR" = "${BASH_SOURCE[0]}" ] && HOOK_DIR=.
+if [ -f "$HOOK_DIR/_common.sh" ]; then . "$HOOK_DIR/_common.sh"; else . "$HOOK_DIR/../_common.sh" || exit 1; fi
 
-TOOL_INFO=$(python3 -c "
-import json, sys
-try:
-    d = json.loads(sys.argv[1])
-    tool_name = d.get('tool_name', '')
-    inp = d.get('tool_input', {})
-    file_path = inp.get('file_path', '') or inp.get('path', '')
-    content = inp.get('new_string', '') or inp.get('content', '')
-    print(file_path)
-    print(tool_name)
-    print(content)
-except:
-    print('')
-    print('')
-    print('')
-" "$INPUT" 2>/dev/null)
+main() {
+  local FILE_PATH PYCODE REPLY RULES_FILE
 
-FILE_PATH=$(echo "$TOOL_INFO" | head -1)
-TOOL_NAME=$(echo "$TOOL_INFO" | sed -n '2p')
-CONTENT=$(echo "$TOOL_INFO" | tail -n +3)
+  get_file_path or_path || return 0
 
-if [ -z "$FILE_PATH" ]; then
-  exit 0
-fi
+  # Fast exit (no python) when no rule applies to this file
+  RULES_FILE="$HOOK_DIR/env_rules.txt"
+  path_gate "$RULES_FILE" ' | ' || return 0
 
-# For Read tool, scan the file content; for Edit/Write, scan new content
-if [ "$TOOL_NAME" = "Read" ] && [ -f "$FILE_PATH" ]; then
-  CONTENT=$(cat "$FILE_PATH" 2>/dev/null)
-fi
-
-if [ -z "$CONTENT" ]; then
-  exit 0
-fi
-
-# --- Load env rules ---
-HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
-RULES_FILE="$HOOK_DIR/env_rules.txt"
-
-if [ ! -f "$RULES_FILE" ]; then
-  exit 0
-fi
-
-VIOLATION=$(python3 -c "
-import re, sys
-
-file_path = sys.argv[1]
-content = sys.argv[2]
-rules_file = sys.argv[3]
-
+  IFS= read -r -d '' PYCODE <<'PYEOF'
+# For the Read tool, scan the file on disk; for Edit/Write, scan the new content
+content = read_file(PATH) if TOOL == 'Read' else CONTENT
+if not PATH or not content:
+    sys.exit(0)
+lines = content.split('\n')
 violations = []
-
-with open(rules_file, 'r') as f:
-    for line in f:
-        line = line.strip()
-        if not line or line.startswith('#'):
-            continue
-        parts = [p.strip() for p in line.split('|')]
-        if len(parts) != 3:
-            continue
-
-        file_pattern, content_pattern, message = parts
-
-        if re.search(file_pattern, file_path, re.IGNORECASE):
-            for content_line in content.split('\n'):
-                if re.search(content_pattern, content_line, re.IGNORECASE):
-                    violations.append(f'{message}: {content_line.strip()[:60]}')
-                    break
-
+for rule in rules(ARGS[0]):
+    # FILE_PATTERN | FORBIDDEN_CONTENT_PATTERN | MESSAGE  (patterns may contain "|")
+    head, sep, message = rule.rpartition(' | ')
+    file_pattern, sep2, content_pattern = head.partition(' | ')
+    if not sep or not sep2:
+        continue
+    file_rx = rx(file_pattern.strip(), re.I)
+    if not file_rx or not file_rx.search(PATH):
+        continue
+    content_rx = rx(content_pattern.strip(), re.I)
+    if not content_rx:
+        continue
+    for line in lines:
+        if content_rx.search(line):
+            violations.append('%s: %s' % (message.strip(), line.strip()[:60]))
+            break
 if violations:
-    print('; '.join(violations[:3]))
-else:
-    print('')
-" "$FILE_PATH" "$CONTENT" "$RULES_FILE" 2>/dev/null)
+    ask('ENV GUARD: ' + '; '.join(violations[:3])[:250])
+PYEOF
 
-if [ -n "$VIOLATION" ]; then
-  SAFE_VIOLATION=$(echo "$VIOLATION" | cut -c1-250 | sed 's/"/\\"/g')
-  python3 -c "
-import json
-result = {
-    'hookSpecificOutput': {
-        'hookEventName': 'PreToolUse',
-        'permissionDecision': 'ask',
-        'permissionDecisionReason': 'ENV GUARD: ${SAFE_VIOLATION}'
-    }
+  run_py "$PYCODE" "$RULES_FILE"
+  return 0
 }
-print(json.dumps(result))
-"
-  exit 0
-fi
 
-exit 0
+main

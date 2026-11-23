@@ -6,87 +6,46 @@
 # Prevents violations like domain importing infrastructure, etc.
 # =============================================================================
 
-INPUT=$(cat)
+HOOK_DIR=${BASH_SOURCE[0]%/*}; [ "$HOOK_DIR" = "${BASH_SOURCE[0]}" ] && HOOK_DIR=.
+if [ -f "$HOOK_DIR/_common.sh" ]; then . "$HOOK_DIR/_common.sh"; else . "$HOOK_DIR/../_common.sh" || exit 1; fi
 
-TOOL_INFO=$(python3 -c "
-import json, sys
-try:
-    d = json.loads(sys.argv[1])
-    inp = d.get('tool_input', {})
-    file_path = inp.get('file_path', '')
-    content = inp.get('new_string', '') or inp.get('content', '')
-    print(file_path)
-    print(content)
-except:
-    print('')
-    print('')
-" "$INPUT" 2>/dev/null)
+main() {
+  local FILE_PATH PYCODE REPLY RULES_FILE
 
-FILE_PATH=$(echo "$TOOL_INFO" | head -1)
-CONTENT=$(echo "$TOOL_INFO" | tail -n +2)
+  get_file_path || return 0
 
-if [ -z "$FILE_PATH" ] || [ -z "$CONTENT" ]; then
-  exit 0
-fi
+  # Fast exit (no python) when the file belongs to no layer of the rules file
+  RULES_FILE="$HOOK_DIR/boundary_rules.txt"
+  path_gate "$RULES_FILE" ' -> ' || return 0
 
-# --- Load boundary rules ---
-HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
-RULES_FILE="$HOOK_DIR/boundary_rules.txt"
-
-if [ ! -f "$RULES_FILE" ]; then
-  exit 0
-fi
-
-# --- Check rules ---
-VIOLATION=$(python3 -c "
-import re, sys
-
-file_path = sys.argv[1]
-content = sys.argv[2]
-rules_file = sys.argv[3]
-
+  IFS= read -r -d '' PYCODE <<'PYEOF'
+if not PATH or not CONTENT:
+    sys.exit(0)
+lines = CONTENT.split('\n')
 violations = []
+for rule in rules(ARGS[0]):
+    if ' -> ' not in rule:
+        continue
+    source, forbidden = (part.strip() for part in rule.split(' -> ', 1))
+    source_rx = rx(source, re.I)
+    # Does the file belong to the source layer?
+    if not source_rx or not source_rx.search(PATH):
+        continue
+    forbidden_rx = rx(forbidden, re.I)
+    if not forbidden_rx:
+        continue
+    # Does the new content contain a forbidden import?
+    for line in lines:
+        if forbidden_rx.search(line):
+            violations.append('%s -> %s' % (source, line.strip()[:80]))
+            break
+if violations:
+    ask('ARCHITECTURE VIOLATION: %s. This import crosses an architectural boundary.'
+        % '; '.join(violations[:3])[:250])
+PYEOF
 
-with open(rules_file, 'r') as f:
-    for line in f:
-        line = line.strip()
-        if not line or line.startswith('#'):
-            continue
-        if ' -> ' not in line:
-            continue
-
-        source_pattern, forbidden_pattern = line.split(' -> ', 1)
-        source_pattern = source_pattern.strip()
-        forbidden_pattern = forbidden_pattern.strip()
-
-        # Check if the file matches the source layer
-        if re.search(source_pattern, file_path, re.IGNORECASE):
-            # Check if the new content contains forbidden imports
-            for content_line in content.split('\n'):
-                if re.search(forbidden_pattern, content_line, re.IGNORECASE):
-                    violations.append(f'{source_pattern} -> {content_line.strip()[:80]}')
-                    break
-
-    if violations:
-        print('; '.join(violations[:3]))
-    else:
-        print('')
-" "$FILE_PATH" "$CONTENT" "$RULES_FILE" 2>/dev/null)
-
-if [ -n "$VIOLATION" ]; then
-  SAFE_VIOLATION=$(echo "$VIOLATION" | cut -c1-250 | sed 's/"/\\"/g')
-  python3 -c "
-import json
-result = {
-    'hookSpecificOutput': {
-        'hookEventName': 'PreToolUse',
-        'permissionDecision': 'ask',
-        'permissionDecisionReason': 'ARCHITECTURE VIOLATION: ${SAFE_VIOLATION}. This import crosses an architectural boundary.'
-    }
+  run_py "$PYCODE" "$RULES_FILE"
+  return 0
 }
-print(json.dumps(result))
-"
-  exit 0
-fi
 
-exit 0
+main

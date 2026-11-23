@@ -6,87 +6,40 @@
 # IEC 61508, DO-178C, ISO 26262, IEC 62443, MISRA C.
 # =============================================================================
 
-INPUT=$(cat)
+HOOK_DIR=${BASH_SOURCE[0]%/*}; [ "$HOOK_DIR" = "${BASH_SOURCE[0]}" ] && HOOK_DIR=.
+if [ -f "$HOOK_DIR/_common.sh" ]; then . "$HOOK_DIR/_common.sh"; else . "$HOOK_DIR/../_common.sh" || exit 1; fi
 
-TOOL_INFO=$(python3 -c "
-import json, sys
-try:
-    d = json.loads(sys.argv[1])
-    inp = d.get('tool_input', {})
-    file_path = inp.get('file_path', '')
-    content = inp.get('new_string', '') or inp.get('content', '')
-    print(file_path)
-    print(content)
-except:
-    print('')
-    print('')
-" "$INPUT" 2>/dev/null)
+main() {
+  local FILE_PATH PYCODE REPLY RULES_FILE
 
-FILE_PATH=$(echo "$TOOL_INFO" | head -1)
-CONTENT=$(echo "$TOOL_INFO" | tail -n +2)
+  get_file_path || return 0
 
-if [ -z "$FILE_PATH" ] || [ -z "$CONTENT" ]; then
-  exit 0
-fi
+  # Only check C/C++/Rust/Ada files (safety-critical languages)
+  has_ext 'c|h|cpp|hpp|cc|hh|rs|ada|adb|ads' nocase || return 0
 
-# Only check C/C++/Rust/Ada files (safety-critical languages)
-if ! echo "$FILE_PATH" | grep -qiE '\.(c|h|cpp|hpp|cc|hh|rs|ada|adb|ads)$'; then
-  exit 0
-fi
+  RULES_FILE="$HOOK_DIR/safety_rules.txt"
+  [ -f "$RULES_FILE" ] || return 0
 
-# --- Load safety rules ---
-HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
-RULES_FILE="$HOOK_DIR/safety_rules.txt"
-
-if [ ! -f "$RULES_FILE" ]; then
-  exit 0
-fi
-
-VIOLATIONS=$(python3 -c "
-import re, sys
-
-file_path = sys.argv[1]
-content = sys.argv[2]
-rules_file = sys.argv[3]
-
+  IFS= read -r -d '' PYCODE <<'PYEOF'
+if not CONTENT:
+    sys.exit(0)
 violations = []
-
-with open(rules_file, 'r') as f:
-    for line in f:
-        line = line.strip()
-        if not line or line.startswith('#'):
-            continue
-        parts = [p.strip() for p in line.split('|')]
-        if len(parts) != 4:
-            continue
-
-        standard, rule_id, pattern, message = parts
-
-        for i, content_line in enumerate(content.split('\n')):
-            if re.search(pattern, content_line):
-                violations.append(f'[{standard} {rule_id}] {message}')
-                break
-
+for rule in rules(ARGS[0]):
+    # STANDARD | RULE_ID | PATTERN | MESSAGE  (PATTERN itself may contain "|")
+    head, sep, message = rule.rpartition(' | ')
+    parts = head.split('|', 2)
+    if not sep or len(parts) != 3:
+        continue
+    standard, rule_id, pattern = (p.strip() for p in parts)
+    pattern_rx = rx(pattern, re.M)
+    if pattern_rx and pattern_rx.search(CONTENT):
+        violations.append('[%s %s] %s' % (standard, rule_id, message.strip()))
 if violations:
-    print('; '.join(violations[:4]))
-else:
-    print('')
-" "$FILE_PATH" "$CONTENT" "$RULES_FILE" 2>/dev/null)
+    ask('SAFETY COMPLIANCE: ' + '; '.join(violations[:4])[:350])
+PYEOF
 
-if [ -n "$VIOLATIONS" ]; then
-  SAFE_VIOLATIONS=$(echo "$VIOLATIONS" | cut -c1-350 | sed 's/"/\\"/g')
-  python3 -c "
-import json
-result = {
-    'hookSpecificOutput': {
-        'hookEventName': 'PreToolUse',
-        'permissionDecision': 'ask',
-        'permissionDecisionReason': 'SAFETY COMPLIANCE: ${SAFE_VIOLATIONS}'
-    }
+  run_py "$PYCODE" "$RULES_FILE"
+  return 0
 }
-print(json.dumps(result))
-"
-  exit 0
-fi
 
-exit 0
+main

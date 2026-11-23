@@ -3,85 +3,57 @@
 # Claude Code PreToolUse Hook - Commit Convention
 # =============================================================================
 # Validates git commit messages follow Conventional Commits format.
-# Format: type(scope): description
+# Format: type(scope): description      (a "!" before ":" marks a breaking change)
 # Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
+#
+# Understands -m "msg", -m 'msg', -am "msg", --message="msg" and heredoc
+# messages: git commit -m "$(cat <<'EOF' ... EOF)"
 # =============================================================================
 
-INPUT=$(cat)
-
-COMMAND=$(python3 -c "
-import json, sys
-try:
-    d = json.loads(sys.argv[1])
-    inp = d.get('tool_input', {})
-    print(inp.get('command', ''))
-except:
-    print('')
-" "$INPUT" 2>/dev/null)
-
-if [ -z "$COMMAND" ]; then
-  exit 0
-fi
-
-# Only check git commit commands
-if ! echo "$COMMAND" | grep -qE 'git\s+commit'; then
-  exit 0
-fi
-
-# Skip amend commits (they modify existing messages)
-if echo "$COMMAND" | grep -qE '\-\-amend'; then
-  exit 0
-fi
-
-# Extract commit message from -m flag
-COMMIT_MSG=$(python3 -c "
-import sys, re
-
-cmd = sys.argv[1]
-
-# Match -m followed by quoted string (single or double quotes, or heredoc)
-# Handle: -m \"msg\", -m 'msg', -m \"\$(cat <<'EOF'...EOF)\"
-patterns = [
-    r'-m\s+\"([^\"]+)\"',
-    r\"-m\s+'([^']+)'\",
-    r'-m\s+\"\\\$\(cat <<.*?EOF(.*?)EOF',
-]
-
-for p in patterns:
-    match = re.search(p, cmd, re.DOTALL)
-    if match:
-        msg = match.group(1).strip()
-        # Get first line only
-        first_line = msg.split('\n')[0].strip()
-        print(first_line)
-        sys.exit(0)
-
-print('')
-" "$COMMAND" 2>/dev/null)
-
-if [ -z "$COMMIT_MSG" ]; then
-  exit 0
-fi
-
-# --- Validate Conventional Commits format ---
-# Pattern: type(optional-scope): description
+# --- Configuration ---
 VALID_TYPES="feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert"
-CONVENTION_REGEX="^($VALID_TYPES)(\([a-zA-Z0-9_.-]+\))?: .+"
 
-if ! echo "$COMMIT_MSG" | grep -qE "$CONVENTION_REGEX"; then
-  python3 -c "
-import json
-msg = '''${COMMIT_MSG}'''[:100]
-result = {
-    'hookSpecificOutput': {
-        'hookEventName': 'PreToolUse',
-        'permissionDecision': 'ask',
-        'permissionDecisionReason': 'COMMIT CONVENTION: message does not follow Conventional Commits format. Got: \"' + msg + '\". Expected: type(scope): description. Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert.'
-    }
+HOOK_DIR=${BASH_SOURCE[0]%/*}; [ "$HOOK_DIR" = "${BASH_SOURCE[0]}" ] && HOOK_DIR=.
+if [ -f "$HOOK_DIR/_common.sh" ]; then . "$HOOK_DIR/_common.sh"; else . "$HOOK_DIR/../_common.sh" || exit 1; fi
+
+main() {
+  local COMMAND COMMIT_ARGS COMMIT_MSG CONVENTION_REGEX NL REPLY RE_COMMIT RE_HEREDOC RE_MSG
+
+  json_str command || return 0
+  COMMAND=$REPLY
+
+  # Only check git commit commands
+  RE_COMMIT="${GIT_RE}commit([^[:alnum:]_-]|\$)(.*)"
+  [[ $COMMAND =~ $RE_COMMIT ]] || return 0
+  COMMIT_ARGS=${BASH_REMATCH[${#BASH_REMATCH[@]}-1]}
+
+  # Skip amend commits (they modify existing messages)
+  [[ $COMMIT_ARGS == *--amend* ]] && return 0
+
+  # --- Extract the first line of the commit message ---
+  NL=$'\n'
+  RE_HEREDOC="<<-?[[:space:]]*['\"]?[A-Za-z_][A-Za-z0-9_]*['\"]?[^$NL]*$NL[[:space:]]*([^$NL]*)"
+  RE_MSG="(^|[[:space:]])(-[a-zA-Z]*m|--message)[[:space:]=]*(\"(([^\"\\\\]|\\\\.)*)\"|'([^']*)')"
+  COMMIT_MSG=""
+  if [[ $COMMIT_ARGS =~ $RE_HEREDOC ]]; then
+    COMMIT_MSG=${BASH_REMATCH[1]}
+  elif [[ $COMMIT_ARGS =~ $RE_MSG ]]; then
+    COMMIT_MSG=${BASH_REMATCH[4]}${BASH_REMATCH[6]}
+    COMMIT_MSG=${COMMIT_MSG#"${COMMIT_MSG%%[![:space:]]*}"}
+    COMMIT_MSG=${COMMIT_MSG%%"$NL"*}
+  fi
+  COMMIT_MSG=${COMMIT_MSG%"${COMMIT_MSG##*[![:space:]]}"}
+
+  # No inline message (editor, -F file, ...) -> nothing to validate
+  [ -n "$COMMIT_MSG" ] || return 0
+
+  # --- Validate Conventional Commits format ---
+  CONVENTION_REGEX="^($VALID_TYPES)(\([a-zA-Z0-9_./-]+\))?!?: .+"
+
+  if ! [[ $COMMIT_MSG =~ $CONVENTION_REGEX ]]; then
+    emit_pre ask "COMMIT CONVENTION: message does not follow Conventional Commits format. Got: \"${COMMIT_MSG:0:100}\". Expected: type(scope): description. Types: ${VALID_TYPES//|/, }."
+  fi
+  return 0
 }
-print(json.dumps(result))
-"
-  exit 0
-fi
 
-exit 0
+main

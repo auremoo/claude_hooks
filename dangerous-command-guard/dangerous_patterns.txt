@@ -32,7 +32,7 @@ ALTER\s+TABLE\s+.*DROP
 mkfs\.
 dd\s+.*of=/dev/
 format\s+[a-zA-Z]:
-:(){ :\|:& };:
+:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:
 chmod\s+(-R\s+)?777
 chown\s+-R\s+
 
